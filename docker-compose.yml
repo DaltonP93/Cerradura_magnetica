@@ -1,0 +1,43 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: acp
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-acp-dev-password}
+      POSTGRES_DB: access_control
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U acp -d access_control"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build: ./backend
+    environment:
+      ACP_DATABASE_URL: postgresql+psycopg2://acp:${POSTGRES_PASSWORD:-acp-dev-password}@db:5432/access_control
+      ACP_SECRET_KEY: ${ACP_SECRET_KEY:?set ACP_SECRET_KEY in .env}
+      ACP_ENVIRONMENT: production
+      ACP_GATEWAY_MODE: ${ACP_GATEWAY_MODE:-simulated}
+      ACP_CORS_ORIGINS: ${ACP_CORS_ORIGINS:-http://localhost:8080}
+      ACP_FIRST_SUPERUSER_EMAIL: ${ACP_FIRST_SUPERUSER_EMAIL:-admin@example.com}
+      ACP_FIRST_SUPERUSER_PASSWORD: ${ACP_FIRST_SUPERUSER_PASSWORD:-admin1234}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: >
+      sh -c "alembic upgrade head && python -m app.seed &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      - backend
+    ports:
+      - "8080:80"
+
+volumes:
+  pgdata:
