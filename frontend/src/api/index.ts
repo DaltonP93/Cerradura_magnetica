@@ -3,6 +3,7 @@ import type {
   AccessEvent,
   AccessLevel,
   AccessLevelInput,
+  AttendanceReport,
   AuditLog,
   Cardholder,
   CardholderInput,
@@ -19,12 +20,19 @@ import type {
   DoorUpdate,
   EventType,
   Holiday,
+  ImportResult,
+  Leave,
+  LeaveInput,
+  ManualSign,
+  ManualSignInput,
   Organization,
   OrganizationCreate,
   OrganizationUpdate,
   Page,
   Schedule,
   ScheduleInput,
+  Shift,
+  ShiftInput,
   Site,
   SiteInput,
   SwipeResult,
@@ -135,6 +143,41 @@ export const cardholdersApi = {
     api
       .delete<{ detail: string }>(`/cardholders/${cardholderId}/credentials/${credentialId}`)
       .then((r) => r.data),
+  importCsv: (file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return api.post<ImportResult>('/cardholders/import', form).then((r) => r.data);
+  },
+  importMdb: (file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return api.post<ImportResult>('/cardholders/import-mdb', form).then((r) => r.data);
+  },
+};
+
+// ---- attendance ----
+export const attendanceApi = {
+  listShifts: (params?: { limit?: number; offset?: number }) =>
+    api.get<Page<Shift>>('/attendance/shifts', { params }).then((r) => r.data),
+  createShift: (body: ShiftInput) => api.post<Shift>('/attendance/shifts', body).then((r) => r.data),
+  updateShift: (id: number, body: Partial<ShiftInput>) =>
+    api.patch<Shift>(`/attendance/shifts/${id}`, body).then((r) => r.data),
+  removeShift: (id: number) => api.delete<{ detail: string }>(`/attendance/shifts/${id}`).then((r) => r.data),
+
+  listLeaves: (params?: { cardholder_id?: number; limit?: number; offset?: number }) =>
+    api.get<Page<Leave>>('/attendance/leaves', { params }).then((r) => r.data),
+  createLeave: (body: LeaveInput) => api.post<Leave>('/attendance/leaves', body).then((r) => r.data),
+  removeLeave: (id: number) => api.delete<{ detail: string }>(`/attendance/leaves/${id}`).then((r) => r.data),
+
+  listManualSigns: (params?: { cardholder_id?: number; limit?: number; offset?: number }) =>
+    api.get<Page<ManualSign>>('/attendance/manual-signs', { params }).then((r) => r.data),
+  createManualSign: (body: ManualSignInput) =>
+    api.post<ManualSign>('/attendance/manual-signs', body).then((r) => r.data),
+  removeManualSign: (id: number) =>
+    api.delete<{ detail: string }>(`/attendance/manual-signs/${id}`).then((r) => r.data),
+
+  report: (params: { date_from: string; date_to: string; department_id?: number; cardholder_id?: number }) =>
+    api.get<AttendanceReport>('/attendance/report', { params }).then((r) => r.data),
 };
 
 // ---- schedules & holidays ----

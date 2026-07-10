@@ -4,6 +4,8 @@ export type UserRole = 'super_admin' | 'admin' | 'operator' | 'viewer';
 export type ControllerStatus = 'online' | 'offline' | 'unknown';
 export type DoorMode = 'controlled' | 'normally_open' | 'normally_closed';
 export type CredentialType = 'card' | 'pin' | 'card_plus_pin';
+export type LeaveType = 'leave' | 'business_trip';
+export type SignKind = 'in' | 'out';
 export type EventType =
   | 'access_granted'
   | 'access_denied'
@@ -103,6 +105,8 @@ export interface Door {
   held_open_alarm_seconds: number;
   sensor_enabled: boolean;
   anti_passback: boolean;
+  first_card_open: boolean;
+  multi_card_count: number;
 }
 
 export interface DoorUpdate {
@@ -112,6 +116,8 @@ export interface DoorUpdate {
   held_open_alarm_seconds?: number;
   sensor_enabled?: boolean;
   anti_passback?: boolean;
+  first_card_open?: boolean;
+  multi_card_count?: number;
 }
 
 export interface Controller {
@@ -126,6 +132,7 @@ export interface Controller {
   firmware_version: string | null;
   status: ControllerStatus;
   last_seen_at: string | null;
+  interlock_enabled: boolean;
   created_at: string;
   doors: Door[];
 }
@@ -145,6 +152,7 @@ export interface ControllerUpdate {
   site_id?: number | null;
   ip_address?: string | null;
   port?: number;
+  interlock_enabled?: boolean;
 }
 
 export interface CommandResult {
@@ -182,6 +190,7 @@ export interface CredentialCreate {
 export interface Cardholder {
   id: number;
   department_id: number | null;
+  shift_id: number | null;
   first_name: string;
   last_name: string;
   employee_number: string | null;
@@ -201,6 +210,7 @@ export interface CardholderInput {
   first_name: string;
   last_name: string;
   department_id?: number | null;
+  shift_id?: number | null;
   employee_number?: string | null;
   email?: string | null;
   phone?: string | null;
@@ -302,6 +312,105 @@ export interface DashboardStats {
   access_denied_today: number;
   alarms_today: number;
   recent_events: AccessEvent[];
+}
+
+// ---- Attendance ----
+export interface Shift {
+  id: number;
+  name: string;
+  start_time: string; // 'HH:MM:SS'
+  end_time: string;
+  late_tolerance_minutes: number;
+  early_leave_tolerance_minutes: number;
+  days_of_week: number[]; // 0=Monday .. 6=Sunday
+  created_at: string;
+}
+
+export interface ShiftInput {
+  name: string;
+  start_time: string; // 'HH:MM:SS'
+  end_time: string;
+  late_tolerance_minutes?: number;
+  early_leave_tolerance_minutes?: number;
+  days_of_week?: number[];
+}
+
+export interface Leave {
+  id: number;
+  cardholder_id: number;
+  type: LeaveType;
+  date_from: string; // YYYY-MM-DD
+  date_to: string;
+  reason: string | null;
+  created_at: string;
+}
+
+export interface LeaveInput {
+  cardholder_id: number;
+  type: LeaveType;
+  date_from: string;
+  date_to: string;
+  reason?: string | null;
+}
+
+export interface ManualSign {
+  id: number;
+  cardholder_id: number;
+  kind: SignKind;
+  signed_at: string;
+  note: string | null;
+  created_at: string;
+}
+
+export interface ManualSignInput {
+  cardholder_id: number;
+  kind: SignKind;
+  signed_at: string; // ISO datetime
+  note?: string | null;
+}
+
+export type AttendanceStatus =
+  | 'present'
+  | 'late'
+  | 'early_leave'
+  | 'incomplete'
+  | 'absent'
+  | 'leave'
+  | 'business_trip'
+  | 'holiday'
+  | 'rest_day';
+
+export interface AttendanceRow {
+  cardholder_id: number;
+  cardholder_name: string;
+  department: string | null;
+  date: string; // YYYY-MM-DD
+  check_in: string | null;
+  check_out: string | null;
+  statuses: string[];
+}
+
+export interface AttendanceSummary {
+  days: number;
+  present: number;
+  late: number;
+  early_leave: number;
+  absent: number;
+  on_leave: number;
+  incomplete: number;
+}
+
+export interface AttendanceReport {
+  date_from: string;
+  date_to: string;
+  rows: AttendanceRow[];
+  summary: AttendanceSummary;
+}
+
+// ---- Bulk import ----
+export interface ImportResult {
+  created: number;
+  errors: { row?: number | string; reason?: string; [key: string]: unknown }[];
 }
 
 // Live event pushed over the WebSocket

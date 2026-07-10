@@ -33,6 +33,7 @@ const NAV_SECTIONS: { title: string; items: NavItem[] }[] = [
     title: 'Personas y accesos',
     items: [
       { to: '/personal', label: 'Personal', icon: '👥' },
+      { to: '/asistencia', label: 'Asistencia', icon: '⏱️' },
       { to: '/departamentos', label: 'Departamentos', icon: '🗂️' },
       { to: '/horarios', label: 'Horarios', icon: '🕒' },
       { to: '/niveles-acceso', label: 'Niveles de acceso', icon: '🔑' },

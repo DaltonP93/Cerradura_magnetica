@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { accessLevelsApi, cardholdersApi, departmentsApi } from '../api';
+import { accessLevelsApi, attendanceApi, cardholdersApi, departmentsApi } from '../api';
 import { apiErrorMessage } from '../api/client';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { DataTable, type Column } from '../components/DataTable';
@@ -22,7 +22,7 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { CREDENTIAL_TYPE_LABELS, formatDate } from '../lib/format';
 import { useDebounced, useFetch } from '../lib/useFetch';
-import type { Cardholder, CredentialType } from '../types';
+import type { Cardholder, CredentialType, ImportResult } from '../types';
 
 const LIMIT = 25;
 
@@ -33,6 +33,7 @@ interface HolderForm {
   email: string;
   phone: string;
   department_id: string;
+  shift_id: string;
   valid_from: string;
   valid_to: string;
   is_active: boolean;
@@ -47,6 +48,7 @@ const EMPTY_FORM: HolderForm = {
   email: '',
   phone: '',
   department_id: '',
+  shift_id: '',
   valid_from: '',
   valid_to: '',
   is_active: true,
@@ -61,6 +63,109 @@ function toDateInput(iso: string | null): string {
 function fromDateInput(value: string, endOfDay = false): string | null {
   if (!value) return null;
   return endOfDay ? `${value}T23:59:59` : `${value}T00:00:00`;
+}
+
+// ---- Bulk import modal (CSV / MDB) ----
+function ImportModal({
+  kind,
+  onClose,
+  onImported,
+}: {
+  kind: 'csv' | 'mdb';
+  onClose: () => void;
+  onImported: () => void;
+}) {
+  const isCsv = kind === 'csv';
+  const [file, setFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<ImportResult | null>(null);
+
+  const handleUpload = async () => {
+    if (!file) return;
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    try {
+      const res = isCsv ? await cardholdersApi.importCsv(file) : await cardholdersApi.importMdb(file);
+      setResult(res);
+      if (res.created > 0) onImported();
+    } catch (err) {
+      setError(apiErrorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      open
+      title={isCsv ? 'Importar personal desde CSV' : 'Importar personal desde MDB'}
+      onClose={onClose}
+      footer={
+        <>
+          <button className={BTN_SECONDARY} onClick={onClose} disabled={busy}>
+            Cerrar
+          </button>
+          <button className={BTN_PRIMARY} onClick={() => void handleUpload()} disabled={busy || !file}>
+            {busy && <Spinner className="h-4 w-4" />}
+            Importar
+          </button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <p className="text-sm text-slate-400">
+          {isCsv
+            ? 'Sube un archivo CSV con las columnas ConsumerNO, Name, CardID y Department (también se aceptan cabeceras en español). Es el mismo formato que la importación desde Excel del software original: exporta la hoja como CSV.'
+            : 'Sube la base de datos iCCard3000.mdb del software legacy (Access). Se detecta automáticamente la tabla de personal y se importan las personas con su tarjeta y departamento.'}
+        </p>
+
+        <FormField label={isCsv ? 'Archivo CSV' : 'Archivo MDB'} required>
+          <input
+            type="file"
+            accept={isCsv ? '.csv,.txt' : '.mdb'}
+            onChange={(e) => {
+              setFile(e.target.files?.[0] ?? null);
+              setResult(null);
+              setError(null);
+            }}
+            className="block w-full text-sm text-slate-300 file:mr-3 file:rounded-md file:border-0 file:bg-slate-700 file:px-3 file:py-2 file:text-sm file:text-slate-200 hover:file:bg-slate-600"
+          />
+        </FormField>
+
+        {error && (
+          <div className="rounded-md border border-red-500/40 bg-red-950/40 px-3 py-2 text-sm text-red-300">
+            {error}
+          </div>
+        )}
+
+        {result && (
+          <div className="space-y-2 rounded-md border border-slate-700/60 bg-slate-800/40 px-3 py-3 text-sm">
+            <p className={result.created > 0 ? 'text-emerald-300' : 'text-slate-300'}>
+              ✓ {result.created} persona{result.created === 1 ? '' : 's'} importada
+              {result.created === 1 ? '' : 's'}.
+            </p>
+            {result.errors.length > 0 && (
+              <div>
+                <p className="mb-1 text-amber-300">
+                  {result.errors.length} fila{result.errors.length === 1 ? '' : 's'} con problemas:
+                </p>
+                <ul className="max-h-40 space-y-1 overflow-y-auto text-xs text-slate-400">
+                  {result.errors.map((e, i) => (
+                    <li key={i}>
+                      {e.row != null ? `Fila ${String(e.row)}: ` : ''}
+                      {e.reason != null ? String(e.reason) : JSON.stringify(e)}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
 }
 
 // ---- Credentials manager (inside edit modal) ----
@@ -220,7 +325,9 @@ export function CardholdersPage() {
   );
   const { data: deptsPage } = useFetch(() => departmentsApi.list({ limit: 500 }), []);
   const { data: levelsPage } = useFetch(() => accessLevelsApi.list({ limit: 500 }), []);
+  const { data: shiftsPage } = useFetch(() => attendanceApi.listShifts({ limit: 500 }), []);
 
+  const [importKind, setImportKind] = useState<'csv' | 'mdb' | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Cardholder | null>(null);
   const [form, setForm] = useState<HolderForm>(EMPTY_FORM);
@@ -247,6 +354,7 @@ export function CardholdersPage() {
       email: h.email ?? '',
       phone: h.phone ?? '',
       department_id: h.department_id != null ? String(h.department_id) : '',
+      shift_id: h.shift_id != null ? String(h.shift_id) : '',
       valid_from: toDateInput(h.valid_from),
       valid_to: toDateInput(h.valid_to),
       is_active: h.is_active,
@@ -279,6 +387,7 @@ export function CardholdersPage() {
       email: form.email || null,
       phone: form.phone || null,
       department_id: form.department_id ? Number(form.department_id) : null,
+      shift_id: form.shift_id ? Number(form.shift_id) : null,
       valid_from: fromDateInput(form.valid_from),
       valid_to: fromDateInput(form.valid_to, true),
       is_active: form.is_active,
@@ -377,9 +486,17 @@ export function CardholdersPage() {
         subtitle="Personas con acceso a las instalaciones y sus credenciales"
         actions={
           canManage && (
-            <button className={BTN_PRIMARY} onClick={openCreate}>
-              + Nueva persona
-            </button>
+            <>
+              <button className={BTN_SECONDARY} onClick={() => setImportKind('csv')}>
+                📄 Importar CSV
+              </button>
+              <button className={BTN_SECONDARY} onClick={() => setImportKind('mdb')}>
+                🗄️ Importar MDB
+              </button>
+              <button className={BTN_PRIMARY} onClick={openCreate}>
+                + Nueva persona
+              </button>
+            </>
           )
         }
       />
@@ -489,6 +606,19 @@ export function CardholdersPage() {
                 ))}
               </Select>
             </FormField>
+            <FormField label="Turno de asistencia">
+              <Select
+                value={form.shift_id}
+                onChange={(e) => setForm({ ...form, shift_id: e.target.value })}
+              >
+                <option value="">Sin turno</option>
+                {(shiftsPage?.items ?? []).map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </Select>
+            </FormField>
             <FormField label="Correo electrónico">
               <TextInput
                 type="email"
@@ -567,6 +697,10 @@ export function CardholdersPage() {
           </div>
         )}
       </Modal>
+
+      {importKind !== null && (
+        <ImportModal kind={importKind} onClose={() => setImportKind(null)} onImported={reload} />
+      )}
 
       <ConfirmDialog
         open={toDelete !== null}

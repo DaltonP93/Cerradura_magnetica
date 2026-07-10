@@ -4,6 +4,7 @@ import { apiErrorMessage } from '../api/client';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { DataTable, type Column } from '../components/DataTable';
 import {
+  Checkbox,
   FormField,
   Select,
   TextInput,
@@ -31,6 +32,7 @@ interface ControllerForm {
   port: string;
   site_id: string;
   door_count: string;
+  interlock_enabled: boolean;
 }
 
 const EMPTY_FORM: ControllerForm = {
@@ -40,6 +42,7 @@ const EMPTY_FORM: ControllerForm = {
   port: '60000',
   site_id: '',
   door_count: '4',
+  interlock_enabled: false,
 };
 
 export function ControllersPage() {
@@ -85,6 +88,7 @@ export function ControllersPage() {
       port: String(c.port),
       site_id: c.site_id != null ? String(c.site_id) : '',
       door_count: String(c.door_count),
+      interlock_enabled: c.interlock_enabled,
     });
     setFormError(null);
     setModalOpen(true);
@@ -101,6 +105,7 @@ export function ControllersPage() {
           ip_address: form.ip_address || null,
           port: Number(form.port),
           site_id: form.site_id ? Number(form.site_id) : null,
+          interlock_enabled: form.interlock_enabled,
         });
         toast.success('Controlador actualizado');
       } else {
@@ -341,6 +346,13 @@ export function ControllersPage() {
               </Select>
             </FormField>
           </div>
+          {editing && (
+            <Checkbox
+              label="Interlock (una puerta abierta a la vez)"
+              checked={form.interlock_enabled}
+              onChange={(v) => setForm({ ...form, interlock_enabled: v })}
+            />
+          )}
           {formError && (
             <div className="rounded-md border border-red-500/40 bg-red-950/40 px-3 py-2 text-sm text-red-300">
               {formError}

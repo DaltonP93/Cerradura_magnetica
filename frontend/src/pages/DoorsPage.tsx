@@ -30,6 +30,8 @@ interface DoorForm {
   held_open_alarm_seconds: string;
   sensor_enabled: boolean;
   anti_passback: boolean;
+  first_card_open: boolean;
+  multi_card_count: string;
 }
 
 export function DoorsPage() {
@@ -69,6 +71,8 @@ export function DoorsPage() {
       held_open_alarm_seconds: String(door.held_open_alarm_seconds),
       sensor_enabled: door.sensor_enabled,
       anti_passback: door.anti_passback,
+      first_card_open: door.first_card_open,
+      multi_card_count: String(door.multi_card_count),
     });
     setFormError(null);
   };
@@ -86,6 +90,8 @@ export function DoorsPage() {
         held_open_alarm_seconds: Number(form.held_open_alarm_seconds),
         sensor_enabled: form.sensor_enabled,
         anti_passback: form.anti_passback,
+        first_card_open: form.first_card_open,
+        multi_card_count: Number(form.multi_card_count),
       });
       toast.success('Puerta actualizada');
       setEditing(null);
@@ -127,9 +133,11 @@ export function DoorsPage() {
     {
       header: 'Opciones',
       render: (d) => (
-        <div className="flex gap-1.5">
+        <div className="flex flex-wrap gap-1.5">
           {d.sensor_enabled && <Badge tone="slate">Sensor</Badge>}
           {d.anti_passback && <Badge tone="slate">Anti-passback</Badge>}
+          {d.first_card_open && <Badge tone="slate">1ª tarjeta</Badge>}
+          {d.multi_card_count > 1 && <Badge tone="slate">{d.multi_card_count} tarjetas</Badge>}
         </div>
       ),
     },
@@ -254,7 +262,27 @@ export function DoorsPage() {
                 checked={form.anti_passback}
                 onChange={(v) => setForm({ ...form, anti_passback: v })}
               />
+              <Checkbox
+                label="Apertura con primera tarjeta"
+                checked={form.first_card_open}
+                onChange={(v) => setForm({ ...form, first_card_open: v })}
+              />
             </div>
+            <FormField
+              label="Tarjetas simultáneas requeridas"
+              hint="1 = deshabilitado; con 2–4 se necesitan varias tarjetas válidas para abrir."
+            >
+              <Select
+                value={form.multi_card_count}
+                onChange={(e) => setForm({ ...form, multi_card_count: e.target.value })}
+              >
+                {[1, 2, 3, 4].map((n) => (
+                  <option key={n} value={n}>
+                    {n === 1 ? '1 (deshabilitado)' : n}
+                  </option>
+                ))}
+              </Select>
+            </FormField>
             {formError && (
               <div className="rounded-md border border-red-500/40 bg-red-950/40 px-3 py-2 text-sm text-red-300">
                 {formError}
