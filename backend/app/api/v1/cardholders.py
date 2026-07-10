@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
@@ -13,8 +13,10 @@ from app.schemas.people import (
     CredentialCreate,
     CredentialOut,
     CredentialUpdate,
+    ImportResult,
 )
 from app.services.audit import record_audit
+from app.services.importer import import_cardholders_csv
 
 router = APIRouter(prefix="/cardholders", tags=["cardholders"])
 
@@ -120,6 +122,29 @@ def delete_cardholder(
                  resource_id=cardholder_id, request=request, organization_id=org_id)
     db.commit()
     return Message(detail="Cardholder deleted")
+
+
+@router.post("/import", response_model=ImportResult)
+async def import_cardholders(
+    file: UploadFile, db: DbSession, org_id: OrgId, request: Request, actor: User = Operator
+):
+    """Bulk import from a CSV export (columns: ConsumerNO, Name, CardID, Department).
+
+    Mirrors the legacy software's "Import consumer's information from Excel"
+    (manual section 5.3). Rows with problems are reported, valid rows are
+    created; missing departments are created on the fly.
+    """
+    if file.filename and not file.filename.lower().endswith((".csv", ".txt")):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Upload a CSV file (export the Excel as CSV)")
+    content = await file.read()
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "File larger than 5 MB")
+    summary = import_cardholders_csv(db, org_id, content)
+    record_audit(db, user=actor, action="import", resource_type="cardholder",
+                 request=request, organization_id=org_id,
+                 details={"created": summary.created, "errors": len(summary.errors)})
+    db.commit()
+    return ImportResult(created=summary.created, errors=summary.errors)
 
 
 # --- Credentials ---

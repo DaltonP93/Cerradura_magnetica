@@ -45,6 +45,13 @@ class CredentialUpdate(BaseModel):
     pin: str | None = Field(default=None, min_length=4, max_length=8, pattern=r"^\d+$")
 
 
+class ImportResult(BaseModel):
+    """Result of a bulk CSV import (manual section 5.3)."""
+
+    created: int
+    errors: list[dict]
+
+
 # --- Cardholders ---
 class CardholderOut(ORMModel):
     id: int

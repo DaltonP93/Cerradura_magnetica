@@ -1,8 +1,11 @@
-"""UDP gateway for L04-style 4-door TCP/IP access control boards.
+"""EXPERIMENTAL UDP gateway for 4-door TCP/IP access control boards.
 
-These boards speak a fixed 64-byte binary packet protocol on UDP port 60000
-(the protocol popularised by UHPPOTE-compatible controllers, which the L04
-family follows). Every packet:
+Implements the public 64-byte binary packet protocol used by
+UHPPOTE-compatible 4-door controllers on UDP port 60000. The legacy N3000
+boards of this project use the same port, but their wire protocol has NOT
+been verified against this implementation — confirm it with the vendor SDK
+or a traffic capture before using this mode in production (see
+docs/HARDWARE.md). Every packet:
 
     offset 0   : 0x17            (packet type)
     offset 1   : function code   (0x20 status, 0x30 set time, 0x40 open door,
