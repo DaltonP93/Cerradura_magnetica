@@ -45,10 +45,18 @@ class CredentialUpdate(BaseModel):
     pin: str | None = Field(default=None, min_length=4, max_length=8, pattern=r"^\d+$")
 
 
+class ImportResult(BaseModel):
+    """Result of a bulk CSV import (manual section 5.3)."""
+
+    created: int
+    errors: list[dict]
+
+
 # --- Cardholders ---
 class CardholderOut(ORMModel):
     id: int
     department_id: int | None
+    shift_id: int | None
     first_name: str
     last_name: str
     employee_number: str | None
@@ -68,6 +76,7 @@ class CardholderCreate(BaseModel):
     first_name: str = Field(min_length=1, max_length=100)
     last_name: str = Field(min_length=1, max_length=100)
     department_id: int | None = None
+    shift_id: int | None = None
     employee_number: str | None = Field(default=None, max_length=50)
     email: EmailStr | None = None
     phone: str | None = Field(default=None, max_length=50)
@@ -83,6 +92,7 @@ class CardholderUpdate(BaseModel):
     first_name: str | None = Field(default=None, min_length=1, max_length=100)
     last_name: str | None = Field(default=None, min_length=1, max_length=100)
     department_id: int | None = None
+    shift_id: int | None = None
     employee_number: str | None = Field(default=None, max_length=50)
     email: EmailStr | None = None
     phone: str | None = Field(default=None, max_length=50)

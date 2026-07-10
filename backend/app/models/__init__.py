@@ -6,6 +6,7 @@ from app.models.access import (
     ScheduleInterval,
     cardholder_access_levels,
 )
+from app.models.attendance import Leave, LeaveType, ManualSign, Shift, SignKind
 from app.models.base import (
     ControllerStatus,
     CredentialType,
@@ -35,7 +36,12 @@ __all__ = [
     "Event",
     "EventType",
     "Holiday",
+    "Leave",
+    "LeaveType",
+    "ManualSign",
     "Organization",
+    "Shift",
+    "SignKind",
     "Schedule",
     "ScheduleInterval",
     "Site",

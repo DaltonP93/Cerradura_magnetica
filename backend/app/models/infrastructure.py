@@ -38,6 +38,8 @@ class Controller(Base, TimestampMixin, OrgScopedMixin):
         Enum(ControllerStatus), default=ControllerStatus.UNKNOWN, nullable=False
     )
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Interlock (manual 3.2.7): only one door of the board may be open at a time.
+    interlock_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     site: Mapped[Site | None] = relationship(back_populates="controllers")
     doors: Mapped[list["Door"]] = relationship(back_populates="controller", cascade="all, delete-orphan")
@@ -56,5 +58,9 @@ class Door(Base, TimestampMixin, OrgScopedMixin):
     held_open_alarm_seconds: Mapped[int] = mapped_column(Integer, default=30, nullable=False)
     sensor_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     anti_passback: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # First card open (manual 3.2.9): door stays unlocked after the first valid card.
+    first_card_open: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # MultiCard access (manual 3.2.8): cards required simultaneously to open (1 = disabled).
+    multi_card_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 
     controller: Mapped[Controller] = relationship(back_populates="doors")

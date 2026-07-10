@@ -25,6 +25,7 @@ class Cardholder(Base, TimestampMixin, OrgScopedMixin):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     department_id: Mapped[int | None] = mapped_column(ForeignKey("departments.id", ondelete="SET NULL"))
+    shift_id: Mapped[int | None] = mapped_column(ForeignKey("shifts.id", ondelete="SET NULL"))
     first_name: Mapped[str] = mapped_column(String(100), nullable=False)
     last_name: Mapped[str] = mapped_column(String(100), nullable=False)
     employee_number: Mapped[str | None] = mapped_column(String(50))

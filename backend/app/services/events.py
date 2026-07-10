@@ -45,6 +45,16 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
+# Main event loop, captured at app startup. Sync endpoints run in worker
+# threads where get_running_loop() fails, so broadcasts are handed to this
+# loop via run_coroutine_threadsafe.
+_main_loop: asyncio.AbstractEventLoop | None = None
+
+
+def set_main_loop(loop: asyncio.AbstractEventLoop) -> None:
+    global _main_loop
+    _main_loop = loop
+
 
 def _event_payload(event: Event) -> dict:
     return {
@@ -93,6 +103,9 @@ def record_event(
         loop = asyncio.get_running_loop()
         loop.create_task(manager.broadcast(organization_id, payload))
     except RuntimeError:
-        # No running loop (e.g. sync test context): skip live broadcast.
-        logger.debug("No event loop running; skipping websocket broadcast")
+        # Worker thread (sync endpoint): hand the broadcast to the main loop.
+        if _main_loop is not None and _main_loop.is_running():
+            asyncio.run_coroutine_threadsafe(manager.broadcast(organization_id, payload), _main_loop)
+        else:
+            logger.debug("No event loop available; skipping websocket broadcast")
     return event

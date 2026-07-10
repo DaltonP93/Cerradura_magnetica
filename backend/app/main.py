@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -7,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.router import api_router, ws_router
 from app.core.config import get_settings
 from app.core.database import Base, engine
+from app.services.events import set_main_loop
 
 logging.basicConfig(level=logging.INFO)
 settings = get_settings()
@@ -17,6 +19,7 @@ async def lifespan(app: FastAPI):
     # Create tables when running without Alembic (dev/tests). In production,
     # run `alembic upgrade head` before starting the app.
     Base.metadata.create_all(bind=engine)
+    set_main_loop(asyncio.get_running_loop())
     yield
 
 

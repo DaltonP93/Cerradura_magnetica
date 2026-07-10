@@ -8,9 +8,12 @@ Plataforma SaaS web multi-tenant para gestionar placas de control de acceso tipo
 - **Usuarios y roles (RBAC)**: `super_admin`, `admin`, `operator`, `viewer`, con JWT (access + refresh) y auditoría de cada acción.
 - **Controladoras L04**: alta por número de serie, IP/puerto, estado online/offline, ping, sincronización de hora y carga de permisos a la placa.
 - **Puertas**: 4 por placa, modo (controlada / normalmente abierta / normalmente cerrada), tiempo de apertura, alarma de puerta retenida, sensor, anti-passback y **apertura remota**.
-- **Personal y credenciales**: departamentos, personas con vigencia (desde/hasta), tarjetas, PIN y tarjeta+PIN.
+- **Personal y credenciales**: departamentos, personas con vigencia (desde/hasta) y turno asignado, tarjetas, PIN y tarjeta+PIN.
 - **Horarios y feriados**: perfiles semanales por intervalos, feriados que bloquean el acceso.
 - **Niveles de acceso**: combinaciones puerta + horario asignables a cada persona.
+- **Asistencia**: turnos con tolerancias, licencias y viajes de trabajo, fichaje manual correctivo y reporte diario (presente / tarde / salida temprana / ausente / licencia / feriado) calculado desde los mismos eventos de acceso.
+- **Funciones avanzadas de puerta**: anti-passback, interlock por controladora, apertura con primera tarjeta y acceso multicard, como el software original.
+- **Migración desde el sistema legacy**: importación de personal desde Excel/CSV y directamente desde la base `iCCard3000.mdb` del software viejo (detección automática de la tabla).
 - **Monitoreo en tiempo real**: WebSocket con todos los eventos (acceso concedido/denegado, apertura remota, alarmas, online/offline) y panel de prueba de lectura de tarjeta.
 - **Motor de decisión de acceso**: replica las reglas del software original (credencial activa → persona activa → vigencia → nivel de acceso → horario → feriados → modo de puerta).
 - **Reportes**: historial de eventos filtrable y exportable; dashboard con estadísticas del día.
@@ -88,7 +91,7 @@ alembic revision --autogenerate -m "cambio"
 
 ## Hardware real
 
-Por defecto la plataforma corre con `ACP_GATEWAY_MODE=simulated` (ideal para probar sin placas). Para hablar con placas reales en la red, configurar `ACP_GATEWAY_MODE=tcp`: el gateway usa el protocolo UDP binario de 64 bytes (puerto 60000) de las controladoras L04/UHPPOTE-compatibles. Ver [docs/HARDWARE.md](docs/HARDWARE.md) para el detalle del protocolo y cómo ajustar los códigos de función a tu revisión de placa.
+Por defecto la plataforma corre con `ACP_GATEWAY_MODE=simulated` (ideal para operar y probar sin placas). Toda la comunicación física está aislada detrás de la interfaz `ControllerGateway`, siguiendo el principio de diseño del proyecto: **no inventar el protocolo del hardware**. Existe además un modo `tcp` experimental (protocolo UDP de 64 bytes, puerto 60000, de controladoras de 4 puertas UHPPOTE-compatibles) que debe verificarse contra las placas N3000 reales antes de producción. Ver [docs/HARDWARE.md](docs/HARDWARE.md) y la trazabilidad completa con el sistema legacy en [docs/LEGACY.md](docs/LEGACY.md).
 
 ## Estructura de la API
 

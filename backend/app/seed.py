@@ -18,6 +18,7 @@ from app.models import (
     Organization,
     Schedule,
     ScheduleInterval,
+    Shift,
     Site,
     User,
     UserRole,
@@ -116,13 +117,23 @@ def seed() -> None:
         db.add_all([it_dept, sales_dept])
         db.flush()
 
+        day_shift = Shift(
+            organization_id=demo.id,
+            name="Turno diurno",
+            start_time=time(9, 0),
+            end_time=time(18, 0),
+            days_of_week=[0, 1, 2, 3, 4],
+        )
+        db.add(day_shift)
+        db.flush()
+
         alice = Cardholder(
-            organization_id=demo.id, department_id=it_dept.id,
+            organization_id=demo.id, department_id=it_dept.id, shift_id=day_shift.id,
             first_name="Alice", last_name="Garcia", employee_number="E-001",
             email="alice@example.com",
         )
         bob = Cardholder(
-            organization_id=demo.id, department_id=sales_dept.id,
+            organization_id=demo.id, department_id=sales_dept.id, shift_id=day_shift.id,
             first_name="Bob", last_name="Lopez", employee_number="E-002",
             email="bob@example.com",
         )

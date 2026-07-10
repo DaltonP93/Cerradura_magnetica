@@ -1,10 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.api.helpers import get_or_404, paginate
 from app.core.deps import DbSession, OrgId, require_roles
-from app.models import AccessLevel, Cardholder, Credential, Department, User, UserRole
+from app.models import AccessLevel, Cardholder, Credential, Department, Shift, User, UserRole
 from app.schemas.common import Message, Page
 from app.schemas.people import (
     CardholderCreate,
@@ -13,8 +13,11 @@ from app.schemas.people import (
     CredentialCreate,
     CredentialOut,
     CredentialUpdate,
+    ImportResult,
 )
 from app.services.audit import record_audit
+from app.services.importer import import_cardholders_csv
+from app.services.legacy_mdb import MdbToolsNotAvailable, import_mdb
 
 router = APIRouter(prefix="/cardholders", tags=["cardholders"])
 
@@ -72,6 +75,8 @@ def create_cardholder(
     data = body.model_dump(exclude={"access_level_ids"})
     if data.get("department_id") is not None:
         get_or_404(db, Department, data["department_id"], org_id)
+    if data.get("shift_id") is not None:
+        get_or_404(db, Shift, data["shift_id"], org_id)
     holder = Cardholder(organization_id=org_id, **data)
     holder.access_levels = _resolve_access_levels(db, org_id, body.access_level_ids)
     db.add(holder)
@@ -99,6 +104,8 @@ def update_cardholder(
     data = body.model_dump(exclude_unset=True)
     if data.get("department_id") is not None:
         get_or_404(db, Department, data["department_id"], org_id)
+    if data.get("shift_id") is not None:
+        get_or_404(db, Shift, data["shift_id"], org_id)
     level_ids = data.pop("access_level_ids", None)
     if level_ids is not None:
         holder.access_levels = _resolve_access_levels(db, org_id, level_ids)
@@ -120,6 +127,65 @@ def delete_cardholder(
                  resource_id=cardholder_id, request=request, organization_id=org_id)
     db.commit()
     return Message(detail="Cardholder deleted")
+
+
+@router.post("/import", response_model=ImportResult)
+async def import_cardholders(
+    file: UploadFile, db: DbSession, org_id: OrgId, request: Request, actor: User = Operator
+):
+    """Bulk import from a CSV export (columns: ConsumerNO, Name, CardID, Department).
+
+    Mirrors the legacy software's "Import consumer's information from Excel"
+    (manual section 5.3). Rows with problems are reported, valid rows are
+    created; missing departments are created on the fly.
+    """
+    if file.filename and not file.filename.lower().endswith((".csv", ".txt")):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Upload a CSV file (export the Excel as CSV)")
+    content = await file.read()
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "File larger than 5 MB")
+    summary = import_cardholders_csv(db, org_id, content)
+    record_audit(db, user=actor, action="import", resource_type="cardholder",
+                 request=request, organization_id=org_id,
+                 details={"created": summary.created, "errors": len(summary.errors)})
+    db.commit()
+    return ImportResult(created=summary.created, errors=summary.errors)
+
+
+@router.post("/import-mdb", response_model=ImportResult)
+async def import_cardholders_mdb(
+    file: UploadFile, db: DbSession, org_id: OrgId, request: Request, actor: User = Operator
+):
+    """Import personnel from the legacy Access database (iCCard3000.mdb).
+
+    The consumer table is auto-detected by its columns (ConsumerNO, Name,
+    CardID, Department). Requires mdbtools on the server (bundled in the
+    Docker image).
+    """
+    if file.filename and not file.filename.lower().endswith(".mdb"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Upload an Access .mdb file")
+    content = await file.read()
+    if len(content) > 50 * 1024 * 1024:
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "File larger than 50 MB")
+
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory(prefix="acp-mdb-") as tmp:
+        mdb_path = Path(tmp) / "legacy.mdb"
+        mdb_path.write_bytes(content)
+        try:
+            summary, table = import_mdb(db, org_id, str(mdb_path))
+        except MdbToolsNotAvailable as exc:
+            raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+    record_audit(db, user=actor, action="import_mdb", resource_type="cardholder",
+                 request=request, organization_id=org_id,
+                 details={"created": summary.created, "errors": len(summary.errors), "table": table})
+    db.commit()
+    return ImportResult(created=summary.created, errors=summary.errors)
 
 
 # --- Credentials ---
