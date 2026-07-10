@@ -38,6 +38,8 @@ class DoorOut(ORMModel):
     held_open_alarm_seconds: int
     sensor_enabled: bool
     anti_passback: bool
+    first_card_open: bool
+    multi_card_count: int
 
 
 class DoorUpdate(BaseModel):
@@ -47,6 +49,8 @@ class DoorUpdate(BaseModel):
     held_open_alarm_seconds: int | None = Field(default=None, ge=5, le=600)
     sensor_enabled: bool | None = None
     anti_passback: bool | None = None
+    first_card_open: bool | None = None
+    multi_card_count: int | None = Field(default=None, ge=1, le=4)
 
 
 # --- Controllers ---
@@ -62,6 +66,7 @@ class ControllerOut(ORMModel):
     firmware_version: str | None
     status: ControllerStatus
     last_seen_at: datetime | None
+    interlock_enabled: bool
     created_at: datetime
     doors: list[DoorOut] = []
 
@@ -81,6 +86,7 @@ class ControllerUpdate(BaseModel):
     site_id: int | None = None
     ip_address: str | None = None
     port: int | None = Field(default=None, ge=1, le=65535)
+    interlock_enabled: bool | None = None
 
 
 class CommandResult(BaseModel):

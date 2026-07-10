@@ -6,7 +6,7 @@ import pytest
 # Configure an isolated database before the app modules are imported.
 _tmpdir = tempfile.mkdtemp(prefix="acp-tests-")
 os.environ["ACP_DATABASE_URL"] = f"sqlite:///{_tmpdir}/test.db"
-os.environ["ACP_SECRET_KEY"] = "test-secret-key"
+os.environ["ACP_SECRET_KEY"] = "test-secret-key-0123456789abcdef0123456789abcdef"
 
 from fastapi.testclient import TestClient  # noqa: E402
 

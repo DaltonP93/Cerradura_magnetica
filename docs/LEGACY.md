@@ -32,19 +32,24 @@ Este documento mapea el material original del proyecto (carpeta de Drive "Cerrad
 | 2.7.2 Backup de BD | ✅ Nivel infraestructura (Postgres `pg_dump`; documentado) |
 | 3.2.3 Time Profiles | ✅ Horarios semanales por intervalos + feriados |
 | 3.2.6 Anti-passback | ✅ Flag por puerta (aplicación en placa vía adaptador real) |
+| 3.2.7 Interlock | ✅ Flag por controladora (`interlock_enabled`) |
+| 3.2.8 MultiCard Access | ✅ Campo por puerta (`multi_card_count`, 1–4) |
+| 3.2.9 First Card Open | ✅ Flag por puerta (`first_card_open`) |
 | 3.3.1 Remote Open Door | ✅ Con evento y auditoría |
+| Parte 4 Asistencia: turnos, licencias/viajes, fichaje manual, reporte | ✅ Módulo `attendance`: turnos con tolerancias y días laborales, licencias y viajes, fichaje manual correctivo y reporte con estados (presente/tarde/salida temprana/ausente/licencia/feriado/descanso/incompleto) |
 | 5.3 Importación desde Excel (ConsumerNO, Name, CardID, Department) | ✅ `POST /api/v1/cardholders/import` (CSV, cabeceras en inglés o español) |
+| Importador de `iCCard3000.mdb` | ✅ `POST /api/v1/cardholders/import-mdb` — detección automática de la tabla de personal vía mdbtools (incluido en la imagen Docker) |
 | Multi-tenant SaaS | ✅ (no existía en el legacy — organizaciones aisladas con planes) |
 
-## Hoja de ruta (funciones extendidas del manual aún no implementadas)
+> Nota sobre los flags de puerta/controladora (anti-passback, interlock, multicard, first card open): la plataforma los almacena y expone en la UI; su aplicación física ocurre en la placa cuando el adaptador real los sincroniza — el simulador los acepta sin efecto físico.
 
-- **Asistencia** (Parte 4): turnos, feriados, permisos/viajes, fichaje manual y reportes de asistencia.
-- **Interlock, MultiCard Access, First Card Open, Controller Task List** (3.2.7–3.2.10): flags avanzados de puerta/controladora.
-- **Módulos multifunción** (3.4): Meal, Patrol, Meeting, One To More.
-- **Importador de `iCCard3000.mdb`**: migración con vista previa desde la base Access legacy.
-- **Alta de tarjeta por lector USB WG1028** y por rango.
-- **Peripheral control y keypad de acceso** (3.2.4–3.2.5).
+## Hoja de ruta (funciones restantes)
+
+- **Módulos multifunción** (3.4): Meal, Patrol, Meeting, One To More — módulos de nicho del software original.
+- **Alta de tarjeta por lector USB WG1028** y por rango (requiere hardware en el puesto de trabajo).
+- **Peripheral control y keypad de acceso** (3.2.4–3.2.5) y **Controller Task List** (3.2.10) — dependen del adaptador de hardware real.
+- **Doble aprobación de comandos sensibles** (idea del proyecto Codex).
 
 ## Relación con el proyecto de Codex
 
-El monorepo de Codex (.NET + Next.js) siguió los mismos prompts de diseño y quedó a nivel MVP (según `revision_parcial_siguiente_fase_codex_cerraduras.md`: sin validación de build certificada). Esta plataforma implementa el mismo dominio y las mismas reglas de los prompts —gateway aislado con mock por defecto, sin protocolo inventado, JWT/RBAC, monitoreo en vivo, auditoría— con un stack Python/React más liviano, **con build verificado y 38 tests automatizados en verde**. Los conceptos del proyecto Codex que siguen vigentes como evolución futura están recogidos en la hoja de ruta (outbox/inbox del gateway, importador MDB, doble aprobación de comandos sensibles).
+El monorepo de Codex (.NET + Next.js) siguió los mismos prompts de diseño y quedó a nivel MVP (según `revision_parcial_siguiente_fase_codex_cerraduras.md`: sin validación de build certificada). Esta plataforma implementa el mismo dominio y las mismas reglas de los prompts —gateway aislado con mock por defecto, sin protocolo inventado, JWT/RBAC, monitoreo en vivo, auditoría— con un stack Python/React más liviano, **con build verificado y 51 tests automatizados en verde**. Los conceptos del proyecto Codex que siguen vigentes como evolución futura están recogidos en la hoja de ruta (outbox/inbox del gateway, importador MDB, doble aprobación de comandos sensibles).
