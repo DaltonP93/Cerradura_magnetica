@@ -6,12 +6,14 @@ Covers Phase 1 items 1 and 2 and the P1 audit findings:
 * P1-3 active close of already-connected WebSockets on revocation.
 """
 import threading
+import time
+from datetime import UTC, datetime
 
 import pytest
 from starlette.websockets import WebSocketDisconnect
 
 from app.core.database import SessionLocal
-from app.core.security import create_refresh_token, hash_token
+from app.core.security import create_access_token, create_refresh_token, hash_token
 from app.models import AuditLog, AuthRefreshToken, AuthSession
 
 
@@ -60,8 +62,7 @@ def test_refresh_rotates_forward(client, seeded):
 def test_replay_r0_after_r1_r2_revokes_whole_session(client, seeded):
     t0 = _login(client)
     t1 = _refresh(client, t0["refresh_token"]).json()          # R0 -> R1
-    t2 = _refresh(client, t1["refresh_token"]).json()          # R1 -> R2
-    assert _refresh(client, t2["refresh_token"]).status_code == 200 or True  # R2 still current
+    t2 = _refresh(client, t1["refresh_token"]).json()          # R1 -> R2 (current)
 
     # Replaying the oldest generation (R0), now two rotations back, is caught...
     replay = _refresh(client, t0["refresh_token"])
@@ -128,24 +129,24 @@ def test_concurrent_refresh_never_yields_two_valid_tokens(client, seeded):
     for t in threads:
         t.join()
 
-    successes = [body for code, body in results if code == 200]
-    assert len(successes) <= 1  # never two independent valid refreshes
+    # Deterministic outcome (whether the two overlap or serialise): exactly one
+    # request consumes the token (200) and the other is rejected (401). Two
+    # independent valid refreshes must never be produced.
+    codes = sorted(code for code, _ in results)
+    assert codes == [200, 401]
 
-    # Family-revocation policy on a race: the session ends revoked, so even a
-    # token handed out by the winner no longer works.
+    # Fail-closed race policy: the family is revoked, so the token handed to the
+    # winner AND the original are both dead, and the live access token is gone.
     db = SessionLocal()
     try:
         session = db.query(AuthSession).one()
+        assert session.revoked_at is not None
     finally:
         db.close()
-    if session.revoked_at is not None:
-        for body in successes:
-            assert _refresh(client, body["refresh_token"]).status_code == 401
-    else:
-        # No race actually occurred (fully serialised): exactly one winner whose
-        # token still works and the original is now spent.
-        assert len(successes) == 1
-        assert _refresh(client, tokens["refresh_token"]).status_code == 401
+    winner = next(body for code, body in results if code == 200)
+    assert _refresh(client, winner["refresh_token"]).status_code == 401
+    assert _refresh(client, tokens["refresh_token"]).status_code == 401
+    assert client.get("/api/v1/auth/me", headers=_auth(tokens)).status_code == 401
 
 
 # --- logout / suspension over HTTP ----------------------------------------
@@ -353,3 +354,79 @@ def test_no_tokens_in_logs(client, seeded, caplog):
         _refresh(client, t0["refresh_token"])
     for secret in (t0["refresh_token"], t1["refresh_token"], hash_token(t0["refresh_token"])):
         assert secret not in caplog.text
+
+
+# --- session bound to the JWT subject --------------------------------------
+
+def test_token_with_mismatched_sub_and_sid_is_rejected(client, seeded):
+    """A validly-signed token whose sub points at a different user than the
+    session's owner must be rejected, without revoking the real session."""
+    ta = _login(client, "admin-a@test.com")
+    _login(client, "admin-b@test.com")
+    db = SessionLocal()
+    try:
+        from app.models import User
+        a = db.query(User).filter_by(email="admin-a@test.com").one()
+        b = db.query(User).filter_by(email="admin-b@test.com").one()
+        a_id, b_id = a.id, b.id
+        a_sid = db.query(AuthSession).filter_by(user_id=a_id).one().session_id
+    finally:
+        db.close()
+
+    # Access token: B's subject, A's session id → 401.
+    forged_access = create_access_token(b_id, None, "admin", a_sid)
+    assert client.get(
+        "/api/v1/auth/me", headers={"Authorization": f"Bearer {forged_access}"}
+    ).status_code == 401
+    # Refresh token: B's subject, A's session id → 401, and A stays intact.
+    forged_refresh = create_refresh_token(b_id, a_sid)
+    assert _refresh(client, forged_refresh).status_code == 401
+    assert client.get("/api/v1/auth/me", headers=_auth(ta)).status_code == 200
+    assert _refresh(client, ta["refresh_token"]).status_code == 200
+    # WebSocket with the forged token is refused at the handshake.
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect(f"/ws/events?token={forged_access}") as ws:
+            ws.receive_text()
+
+
+# --- WebSocket revalidation cannot be starved by client traffic ------------
+
+def test_ws_revalidation_not_starved_by_continuous_client_activity(client, seeded):
+    """A client that keeps sending must not prevent the periodic revalidation
+    from noticing a revocation made in another process (direct DB revoke, so no
+    in-process close signal fires)."""
+    tokens = _login(client)
+    db = SessionLocal()
+    try:
+        sid = db.query(AuthSession).one().session_id
+    finally:
+        db.close()
+
+    stop = threading.Event()
+    sender: dict = {}
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect(f"/ws/events?token={tokens['access_token']}") as ws:
+            db = SessionLocal()
+            try:
+                s = db.query(AuthSession).filter_by(session_id=sid).one()
+                s.revoked_at = datetime.now(UTC)
+                s.revoked_reason = "test_direct_revoke"
+                db.commit()
+            finally:
+                db.close()
+
+            def flood():
+                while not stop.is_set():
+                    try:
+                        ws.send_text("ping")
+                    except Exception:  # noqa: BLE001 - socket closed by the server
+                        break
+                    time.sleep(0.05)
+
+            sender["t"] = threading.Thread(target=flood, daemon=True)
+            sender["t"].start()
+            # Blocks until the server closes via periodic revalidation.
+            ws.receive_text()
+    stop.set()
+    if "t" in sender:
+        sender["t"].join(timeout=2)

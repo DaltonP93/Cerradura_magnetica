@@ -112,7 +112,9 @@ def issue_tokens(db: Session, user: User, request: Request | None = None) -> tup
 
 # --- rotation / refresh ---------------------------------------------------
 
-def rotate_refresh(db: Session, session_id: str, presented_token: str) -> tuple[str, str]:
+def rotate_refresh(
+    db: Session, session_id: str, presented_token: str, expected_user_id: int
+) -> tuple[str, str]:
     """Validate + atomically consume a refresh token and issue the next pair.
 
     Raises :class:`SessionError` on any problem; a replayed/raced generation
@@ -123,6 +125,10 @@ def rotate_refresh(db: Session, session_id: str, presented_token: str) -> tuple[
     ).scalar_one_or_none()
     if session is None or session.revoked_at is not None:
         raise SessionError("Session is not active")
+    # The token's subject must match the session's owner: a token whose sid and
+    # sub disagree is rejected without touching the real session.
+    if session.user_id != expected_user_id:
+        raise SessionError("Token subject does not match session")
     if _expired(session.expires_at):
         raise SessionError("Session expired")
 
@@ -258,19 +264,27 @@ def revoke_org_sessions(db: Session, organization_id: int, reason: str) -> int:
 
 # --- validation / lookups -------------------------------------------------
 
-def get_active_session(db: Session, session_id: str) -> AuthSession | None:
-    """Return the session if it exists, is not revoked and has not expired."""
+def get_active_session(
+    db: Session, session_id: str, user_id: int | None = None
+) -> AuthSession | None:
+    """Return the session if it exists, is not revoked and has not expired.
+
+    When ``user_id`` is given, the session must also belong to that user, so a
+    token whose ``sid`` and ``sub`` disagree is never accepted.
+    """
     session = db.execute(
         select(AuthSession).where(AuthSession.session_id == session_id)
     ).scalar_one_or_none()
     if session is None or session.revoked_at is not None or _expired(session.expires_at):
         return None
+    if user_id is not None and session.user_id != user_id:
+        return None
     return session
 
 
-def session_is_live(db: Session, session_id: str) -> bool:
+def session_is_live(db: Session, session_id: str, user_id: int | None = None) -> bool:
     """True only if the session is active AND its user and org are active."""
-    session = get_active_session(db, session_id)
+    session = get_active_session(db, session_id, user_id)
     if session is None:
         return False
     user = db.get(User, session.user_id)

@@ -50,7 +50,9 @@ def refresh(body: RefreshRequest, db: DbSession):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Refresh token is not bound to a session")
 
     try:
-        access_token, refresh_token = sessions.rotate_refresh(db, session_id, body.refresh_token)
+        access_token, refresh_token = sessions.rotate_refresh(
+            db, session_id, body.refresh_token, int(payload["sub"])
+        )
     except sessions.SessionError as exc:
         if exc.reuse and exc.session_id:
             # Security event: replay/race detected. Never store the token itself.

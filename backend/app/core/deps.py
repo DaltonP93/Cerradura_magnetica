@@ -26,10 +26,12 @@ def get_current_user(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired token") from exc
 
     session_id = payload.get("sid")
-    if not session_id or get_active_session(db, session_id) is None:
+    subject = int(payload["sub"])
+    # The session must exist, be live, AND belong to the token's subject.
+    if not session_id or get_active_session(db, session_id, subject) is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Session is no longer active")
 
-    user = db.get(User, int(payload["sub"]))
+    user = db.get(User, subject)
     if user is None or not user.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User not found or inactive")
     if not organization_active(db, user):

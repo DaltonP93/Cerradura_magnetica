@@ -37,11 +37,13 @@ def _authenticate(token: str, requested_org: int | None) -> tuple[int, str, int]
     session_id = payload.get("sid")
     if not session_id:
         return None
+    subject = int(payload["sub"])
     db = SessionLocal()
     try:
-        if get_active_session(db, session_id) is None:
+        # Session must be live AND belong to the token's subject.
+        if get_active_session(db, session_id, subject) is None:
             return None
-        user = db.get(User, int(payload["sub"]))
+        user = db.get(User, subject)
         if user is None or not user.is_active or not organization_active(db, user):
             return None
         # Super admins may watch a chosen organization; everyone else is locked
@@ -55,10 +57,10 @@ def _authenticate(token: str, requested_org: int | None) -> tuple[int, str, int]
         db.close()
 
 
-def _still_live(session_id: str) -> bool:
+def _still_live(session_id: str, user_id: int) -> bool:
     db = SessionLocal()
     try:
-        return session_is_live(db, session_id)
+        return session_is_live(db, session_id, user_id)
     finally:
         db.close()
 
@@ -76,13 +78,20 @@ async def events_ws(
     user_id, session_id, org_id = identity
 
     conn = await manager.connect(websocket, org_id=org_id, user_id=user_id, session_id=session_id)
+    loop = asyncio.get_running_loop()
+    interval = max(0.1, settings.ws_revalidate_seconds)
+    next_revalidate = loop.time() + interval
     try:
         while True:
+            # Revalidation is gated by a wall-clock deadline, not by whether this
+            # wake came from the timeout branch, so a client that sends
+            # continuously can never starve the periodic session re-check.
+            timeout = max(0.0, next_revalidate - loop.time())
             receive_task = asyncio.ensure_future(websocket.receive_text())
             close_task = asyncio.ensure_future(conn.close_event.wait())
             done, pending = await asyncio.wait(
                 {receive_task, close_task},
-                timeout=settings.ws_revalidate_seconds,
+                timeout=timeout,
                 return_when=asyncio.FIRST_COMPLETED,
             )
             for task in pending:
@@ -92,13 +101,15 @@ async def events_ws(
 
             if conn.close_event.is_set():
                 break  # revoked in-process (logout / suspension / reuse)
-            if receive_task in done:
-                if receive_task.exception() is not None:
-                    break  # client disconnected
-                continue  # client sent a ping/keepalive; ignore content
-            # Timed out: revalidate against the database (cross-process safety net).
-            if not _still_live(session_id):
-                break
+            client_gone = receive_task in done and receive_task.exception() is not None
+
+            if loop.time() >= next_revalidate:
+                # Cross-process safety net: catch revocations made elsewhere.
+                if not _still_live(session_id, user_id):
+                    break
+                next_revalidate = loop.time() + interval
+            if client_gone:
+                break  # client disconnected
     except WebSocketDisconnect:
         pass
     finally:
