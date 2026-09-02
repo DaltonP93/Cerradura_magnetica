@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
     jwt_algorithm: str = "HS256"
+    # Optional dedicated key for encrypting recoverable secrets (PINs) at rest.
+    # A urlsafe-base64 32-byte Fernet key (`Fernet.generate_key()`). When unset,
+    # a separate key is derived from secret_key; either way it lives outside the
+    # database.
+    pin_encryption_key: str | None = None
 
     # Database. SQLite by default for local development; Postgres in production.
     database_url: str = "sqlite:///./access_control.db"
