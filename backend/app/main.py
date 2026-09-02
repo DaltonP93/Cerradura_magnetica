@@ -16,9 +16,10 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Create tables when running without Alembic (dev/tests). In production,
-    # run `alembic upgrade head` before starting the app.
-    Base.metadata.create_all(bind=engine)
+    # Create tables when running without Alembic (dev/tests). Production is
+    # schema-managed by `alembic upgrade head`, so never auto-create there.
+    if not settings.is_production:
+        Base.metadata.create_all(bind=engine)
     set_main_loop(asyncio.get_running_loop())
     yield
 
