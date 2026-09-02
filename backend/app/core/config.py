@@ -45,6 +45,13 @@ class Settings(BaseSettings):
     # an immediate cross-process signal.
     ws_revalidate_seconds: float = 15.0
 
+    # Brute-force protection. After `login_max_attempts` consecutive failures an
+    # account is locked for `login_lockout_minutes`. Independently, auth
+    # endpoints are throttled to `auth_rate_limit_per_minute` requests per IP.
+    login_max_attempts: int = 5
+    login_lockout_minutes: int = 15
+    auth_rate_limit_per_minute: int = 30
+
     # Initial super admin (created by the seed command if no users exist)
     first_superuser_email: str = "admin@example.com"
     first_superuser_password: str = DEFAULT_SUPERUSER_PASSWORD

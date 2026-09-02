@@ -12,6 +12,9 @@ os.environ.setdefault("ACP_DATABASE_URL", f"sqlite:///{_tmpdir}/test.db")
 os.environ.setdefault("ACP_SECRET_KEY", "test-secret-key-0123456789abcdef0123456789abcdef")
 # Keep live WebSockets revalidating quickly so revocation tests stay fast.
 os.environ.setdefault("ACP_WS_REVALIDATE_SECONDS", "1")
+# Disable the auth IP rate limiter by default; the suite performs many logins.
+# The dedicated rate-limit test enables it locally.
+os.environ.setdefault("ACP_AUTH_RATE_LIMIT_PER_MINUTE", "0")
 
 from fastapi.testclient import TestClient  # noqa: E402
 

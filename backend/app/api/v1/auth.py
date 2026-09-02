@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 import jwt as pyjwt
@@ -6,7 +6,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 
+from app.core.config import get_settings
 from app.core.deps import CurrentUser, DbSession
+from app.core.ratelimit import rate_limit_auth
 from app.core.security import decode_token, hash_password, verify_password
 from app.models import User
 from app.schemas.auth import ChangePasswordRequest, LoginRequest, RefreshRequest, TokenPair, UserOut
@@ -16,29 +18,61 @@ from app.services.audit import record_audit
 from app.services.events import manager
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+settings = get_settings()
 
 _bearer = HTTPBearer(auto_error=False)
 
 
-@router.post("/login", response_model=TokenPair)
+def _as_utc(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+
+
+@router.post("/login", response_model=TokenPair, dependencies=[Depends(rate_limit_auth)])
 def login(body: LoginRequest, db: DbSession, request: Request):
     user = db.execute(select(User).where(User.email == body.email.lower())).scalar_one_or_none()
+    now = datetime.now(UTC)
+
+    locked_until = _as_utc(user.locked_until) if user else None
+    if locked_until and locked_until > now:
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "Account temporarily locked after repeated failed logins. Try again later.",
+        )
+
     if user is None or not verify_password(body.password, user.hashed_password):
+        # Count the failure and lock the account once the threshold is reached.
+        if user is not None:
+            user.failed_login_count += 1
+            if user.failed_login_count >= settings.login_max_attempts:
+                user.locked_until = now + timedelta(minutes=settings.login_lockout_minutes)
+                user.failed_login_count = 0
+                record_audit(
+                    db, user=user, action="account_locked", resource_type="user",
+                    resource_id=user.id, request=request,
+                    details={"lockout_minutes": settings.login_lockout_minutes},
+                )
+            db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Incorrect email or password")
+
     if not user.is_active:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "User account is disabled")
     if not sessions.organization_active(db, user):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Organization is suspended")
 
+    # A successful login clears any accumulated failure state.
+    user.failed_login_count = 0
+    user.locked_until = None
     sessions.purge_expired(db)
     access_token, refresh_token, _ = sessions.issue_tokens(db, user, request)
-    user.last_login_at = datetime.now(UTC)
+    user.last_login_at = now
     record_audit(db, user=user, action="login", resource_type="user", resource_id=user.id, request=request)
     db.commit()
     return TokenPair(access_token=access_token, refresh_token=refresh_token)
 
 
-@router.post("/refresh", response_model=TokenPair)
+@router.post("/refresh", response_model=TokenPair, dependencies=[Depends(rate_limit_auth)])
 def refresh(body: RefreshRequest, db: DbSession):
     try:
         payload = decode_token(body.refresh_token, "refresh")
