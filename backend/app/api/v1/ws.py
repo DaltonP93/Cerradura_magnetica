@@ -6,6 +6,7 @@ from app.core.database import SessionLocal
 from app.core.security import decode_token
 from app.models import User, UserRole
 from app.services.events import manager
+from app.services.sessions import get_active_session, organization_active
 
 router = APIRouter(tags=["monitoring"])
 
@@ -22,12 +23,17 @@ async def events_ws(
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
+    session_id = payload.get("sid")
     db = SessionLocal()
     try:
+        if not session_id or get_active_session(db, session_id) is None:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
         user = db.get(User, int(payload["sub"]))
+        active = user is not None and user.is_active and organization_active(db, user)
     finally:
         db.close()
-    if user is None or not user.is_active:
+    if not active:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 

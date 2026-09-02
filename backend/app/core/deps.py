@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.security import decode_token
 from app.models import User, UserRole
+from app.services.sessions import get_active_session, organization_active
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -23,9 +24,16 @@ def get_current_user(
         payload = decode_token(credentials.credentials, "access")
     except pyjwt.InvalidTokenError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired token") from exc
+
+    session_id = payload.get("sid")
+    if not session_id or get_active_session(db, session_id) is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Session is no longer active")
+
     user = db.get(User, int(payload["sub"]))
     if user is None or not user.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User not found or inactive")
+    if not organization_active(db, user):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Organization is suspended")
     return user
 
 
