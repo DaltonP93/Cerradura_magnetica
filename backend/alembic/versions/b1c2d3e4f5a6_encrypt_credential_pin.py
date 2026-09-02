@@ -1,7 +1,7 @@
 """encrypt credential pin (widen column for ciphertext)
 
 Revision ID: b1c2d3e4f5a6
-Revises: 995243b73005
+Revises: ae2f708080f5
 Create Date: 2026-09-02 19:05:00.000000
 
 The PIN is now stored encrypted at rest (Fernet ciphertext), which is longer
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "b1c2d3e4f5a6"
-down_revision = "995243b73005"
+down_revision = "ae2f708080f5"
 branch_labels = None
 depends_on = None
 
