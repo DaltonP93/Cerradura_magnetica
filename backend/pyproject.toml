@@ -9,5 +9,10 @@ ignore = [
     "UP042",  # keep (str, Enum): values serialize as plain strings in SQLAlchemy + Pydantic
 ]
 
+[tool.ruff.lint.per-file-ignores]
+# Alembic writes long, single-line Enum/DDL definitions that can't be wrapped
+# without hand-editing generated code; length is not a real defect there.
+"alembic/versions/*" = ["E501"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
