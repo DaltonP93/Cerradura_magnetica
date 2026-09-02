@@ -8,6 +8,8 @@ from app.models import Organization, User, UserRole
 from app.schemas.auth import UserCreate, UserOut, UserUpdate
 from app.schemas.common import Message, Page
 from app.services.audit import record_audit
+from app.services.events import manager
+from app.services.sessions import revoke_user_sessions
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -80,15 +82,27 @@ def update_user(
     data = body.model_dump(exclude_unset=True)
     if "role" in data and data["role"] == UserRole.SUPER_ADMIN and actor.role != UserRole.SUPER_ADMIN:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Only super admins can grant super admin")
+    # Disabling the account, resetting its password or changing its role must
+    # invalidate every live session the user still holds.
+    invalidate_sessions = data.get("is_active") is False or "password" in data or "role" in data
     if "password" in data:
         target.hashed_password = hash_password(data.pop("password"))
     for field, value in data.items():
         setattr(target, field, value)
+    if invalidate_sessions:
+        count = revoke_user_sessions(db, target.id, "admin_update")
+        record_audit(
+            db, user=actor, action="revoke_sessions", resource_type="user",
+            resource_id=target.id, request=request, organization_id=target.organization_id,
+            details={"revoked_sessions": count, "reason": "admin_update"},
+        )
     record_audit(
         db, user=actor, action="update", resource_type="user",
         resource_id=target.id, request=request, organization_id=target.organization_id,
     )
     db.commit()
+    if invalidate_sessions:
+        manager.close_user(target.id)  # tear down live monitor sockets
     return target
 
 
