@@ -8,6 +8,7 @@ from app.models import Organization, User, UserRole
 from app.schemas.auth import UserCreate, UserOut, UserUpdate
 from app.schemas.common import Message, Page
 from app.services.audit import record_audit
+from app.services.events import manager
 from app.services.sessions import revoke_user_sessions
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -89,12 +90,19 @@ def update_user(
     for field, value in data.items():
         setattr(target, field, value)
     if invalidate_sessions:
-        revoke_user_sessions(db, target.id, "admin_update")
+        count = revoke_user_sessions(db, target.id, "admin_update")
+        record_audit(
+            db, user=actor, action="revoke_sessions", resource_type="user",
+            resource_id=target.id, request=request, organization_id=target.organization_id,
+            details={"revoked_sessions": count, "reason": "admin_update"},
+        )
     record_audit(
         db, user=actor, action="update", resource_type="user",
         resource_id=target.id, request=request, organization_id=target.organization_id,
     )
     db.commit()
+    if invalidate_sessions:
+        manager.close_user(target.id)  # tear down live monitor sockets
     return target
 
 

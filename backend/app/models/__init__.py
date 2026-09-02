@@ -7,7 +7,7 @@ from app.models.access import (
     cardholder_access_levels,
 )
 from app.models.attendance import Leave, LeaveType, ManualSign, Shift, SignKind
-from app.models.auth_session import AuthSession
+from app.models.auth_session import AuthRefreshToken, AuthSession
 from app.models.base import (
     ControllerStatus,
     CredentialType,
@@ -25,6 +25,7 @@ __all__ = [
     "AccessLevel",
     "AccessLevelDoor",
     "AuditLog",
+    "AuthRefreshToken",
     "AuthSession",
     "Cardholder",
     "Controller",

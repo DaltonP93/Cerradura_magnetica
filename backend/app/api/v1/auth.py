@@ -13,6 +13,7 @@ from app.schemas.auth import ChangePasswordRequest, LoginRequest, RefreshRequest
 from app.schemas.common import Message
 from app.services import sessions
 from app.services.audit import record_audit
+from app.services.events import manager
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -29,6 +30,7 @@ def login(body: LoginRequest, db: DbSession, request: Request):
     if not sessions.organization_active(db, user):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Organization is suspended")
 
+    sessions.purge_expired(db)
     access_token, refresh_token, _ = sessions.issue_tokens(db, user, request)
     user.last_login_at = datetime.now(UTC)
     record_audit(db, user=user, action="login", resource_type="user", resource_id=user.id, request=request)
@@ -46,13 +48,22 @@ def refresh(body: RefreshRequest, db: DbSession):
     session_id = payload.get("sid")
     if not session_id:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Refresh token is not bound to a session")
+
     try:
-        user, session = sessions.consume_for_refresh(db, session_id, body.refresh_token)
+        access_token, refresh_token = sessions.rotate_refresh(db, session_id, body.refresh_token)
     except sessions.SessionError as exc:
-        db.commit()  # persist a revocation triggered by reuse detection
+        if exc.reuse and exc.session_id:
+            # Security event: replay/race detected. Never store the token itself.
+            record_audit(
+                db, user=None, action="refresh_reuse_detected", resource_type="session",
+                resource_id=exc.session_id, organization_id=exc.organization_id,
+                details={"reason": "refresh_reuse"},
+            )
+        db.commit()  # persist any family revocation triggered above
+        if exc.session_id:
+            manager.close_session(exc.session_id)  # tear down live sockets on reuse
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, exc.message) from exc
 
-    access_token, refresh_token = sessions.rotate(db, user, session)
     db.commit()
     return TokenPair(access_token=access_token, refresh_token=refresh_token)
 
@@ -69,10 +80,15 @@ def logout(
         except pyjwt.InvalidTokenError:
             payload = None
         if payload and payload.get("sid"):
-            session = sessions.get_active_session(db, payload["sid"])
+            session = sessions.revoke_session_id(db, payload["sid"], "logout")
             if session is not None:
-                sessions.revoke(session, "logout")
+                user = db.get(User, session.user_id)
+                record_audit(
+                    db, user=user, action="logout", resource_type="session",
+                    resource_id=session.session_id,
+                )
                 db.commit()
+                manager.close_session(session.session_id)
     return Message(detail="Logged out")
 
 
@@ -90,4 +106,5 @@ def change_password(body: ChangePasswordRequest, user: CurrentUser, db: DbSessio
     sessions.revoke_user_sessions(db, user.id, "password_change")
     record_audit(db, user=user, action="change_password", resource_type="user", resource_id=user.id, request=request)
     db.commit()
+    manager.close_user(user.id)
     return Message(detail="Password updated")

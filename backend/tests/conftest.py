@@ -4,9 +4,14 @@ import tempfile
 import pytest
 
 # Configure an isolated database before the app modules are imported.
+# CI can pre-set ACP_DATABASE_URL (e.g. PostgreSQL) to run the same suite
+# against a real engine that certifies row-level locking; otherwise default to
+# a throwaway SQLite file.
 _tmpdir = tempfile.mkdtemp(prefix="acp-tests-")
-os.environ["ACP_DATABASE_URL"] = f"sqlite:///{_tmpdir}/test.db"
-os.environ["ACP_SECRET_KEY"] = "test-secret-key-0123456789abcdef0123456789abcdef"
+os.environ.setdefault("ACP_DATABASE_URL", f"sqlite:///{_tmpdir}/test.db")
+os.environ.setdefault("ACP_SECRET_KEY", "test-secret-key-0123456789abcdef0123456789abcdef")
+# Keep live WebSockets revalidating quickly so revocation tests stay fast.
+os.environ.setdefault("ACP_WS_REVALIDATE_SECONDS", "1")
 
 from fastapi.testclient import TestClient  # noqa: E402
 

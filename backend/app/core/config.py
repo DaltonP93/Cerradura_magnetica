@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     gateway_mode: str = "simulated"
     gateway_poll_interval_seconds: int = 30
 
+    # How often a live WebSocket re-checks that its session is still valid, so
+    # revocations performed in another worker/process are picked up even without
+    # an immediate cross-process signal.
+    ws_revalidate_seconds: float = 15.0
+
     # Initial super admin (created by the seed command if no users exist)
     first_superuser_email: str = "admin@example.com"
     first_superuser_password: str = "admin1234"
