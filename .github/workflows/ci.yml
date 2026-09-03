@@ -22,6 +22,11 @@ jobs:
         run: pip install -r requirements-dev.txt
       - name: Lint (ruff) — whole backend incl. migrations and alembic/env.py
         run: ruff check .
+      - name: Verify a single Alembic head (no divergent branches)
+        run: |
+          heads=$(alembic heads | grep -c '(head)')
+          echo "alembic heads: $heads"
+          test "$heads" = "1"
       - name: Tests (SQLite)
         run: pytest tests -q
       - name: Verify Alembic migrations apply
@@ -78,5 +83,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - name: Install dependencies
         run: npm ci
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
       - name: Build (typecheck + bundle)
         run: npm run build
