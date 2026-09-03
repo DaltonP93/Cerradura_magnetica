@@ -144,6 +144,23 @@ def test_card_plus_pin(client, admin_headers, operator_headers, setup_access):
     assert swipe(client, operator_headers, door_id, "77777", pin="1234")["granted"] is True
 
 
+def test_pin_only_requires_pin(client, admin_headers, operator_headers, setup_access):
+    """A PIN-only credential must not be granted on the card number alone."""
+    holder_id = setup_access["holder"]["id"]
+    cred = client.post(
+        f"/api/v1/cardholders/{holder_id}/credentials",
+        json={"card_number": "88888", "type": "pin", "pin": "4321"},
+        headers=admin_headers,
+    )
+    assert cred.status_code == 201
+    door_id = setup_access["doors"][0]["id"]
+    # No PIN and wrong PIN are both denied...
+    assert swipe(client, operator_headers, door_id, "88888")["reason"] == "wrong_pin"
+    assert swipe(client, operator_headers, door_id, "88888", pin="0000")["reason"] == "wrong_pin"
+    # ...only the correct PIN opens.
+    assert swipe(client, operator_headers, door_id, "88888", pin="4321")["granted"] is True
+
+
 def test_swipe_events_recorded(client, admin_headers, operator_headers, setup_access):
     door_id = setup_access["doors"][0]["id"]
     swipe(client, operator_headers, door_id, "55555")

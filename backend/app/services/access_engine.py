@@ -5,6 +5,7 @@ mirroring the rules of the original L04 desktop software: credential state,
 cardholder validity window, access levels (door + schedule), holidays and
 door mode.
 """
+import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
@@ -33,6 +34,17 @@ class AccessDecision:
     reason: DeniedReason | None = None
     cardholder: Cardholder | None = None
     credential: Credential | None = None
+
+
+# Credential types that require a PIN as a second (or sole) factor.
+_PIN_REQUIRED = frozenset({CredentialType.CARD_PLUS_PIN, CredentialType.PIN})
+
+
+def _pin_matches(presented: str | None, stored: str | None) -> bool:
+    """Constant-time PIN comparison; a missing PIN on either side never matches."""
+    if not presented or not stored:
+        return False
+    return secrets.compare_digest(presented, stored)
 
 
 def _as_utc(dt: datetime | None) -> datetime | None:
@@ -99,7 +111,10 @@ def evaluate_access(
         return AccessDecision(False, DeniedReason.UNKNOWN_CREDENTIAL)
     if not credential.is_active:
         return AccessDecision(False, DeniedReason.CREDENTIAL_INACTIVE, credential.cardholder, credential)
-    if credential.type == CredentialType.CARD_PLUS_PIN and (not pin or pin != credential.pin):
+    # A PIN is mandatory for both card+PIN and PIN-only credentials. Without
+    # this, a PIN-only credential would be granted on the card number alone,
+    # bypassing its second factor (invariant #3).
+    if credential.type in _PIN_REQUIRED and not _pin_matches(pin, credential.pin):
         return AccessDecision(False, DeniedReason.WRONG_PIN, credential.cardholder, credential)
 
     holder = credential.cardholder
