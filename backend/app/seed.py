@@ -46,12 +46,15 @@ def seed(cfg: Settings | None = None) -> None:
         db.add(demo)
         db.flush()
 
+        # The platform super admin is tenant-agnostic: it must NOT belong to any
+        # organization, otherwise a tenant admin sharing that org could reach and
+        # modify it (privilege escalation to platform level).
         superadmin = User(
             email=cfg.first_superuser_email.lower(),
             full_name="Platform Admin",
             hashed_password=hash_password(cfg.first_superuser_password),
             role=UserRole.SUPER_ADMIN,
-            organization_id=demo.id,
+            organization_id=None,
         )
         org_admin = User(
             email="demo-admin@example.com",

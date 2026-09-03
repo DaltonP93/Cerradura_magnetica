@@ -20,8 +20,12 @@ def _get_scoped_user(db, user_id: int, actor: User, org_id: int) -> User:
     target = db.get(User, user_id)
     if target is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
-    if actor.role != UserRole.SUPER_ADMIN and target.organization_id != org_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+    if actor.role != UserRole.SUPER_ADMIN:
+        # Tenant admins are confined to their own organization and may never
+        # reach a platform super admin (defense in depth against privilege
+        # escalation, even if a super admin were ever mis-scoped into an org).
+        if target.organization_id != org_id or target.role == UserRole.SUPER_ADMIN:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
     return target
 
 

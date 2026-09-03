@@ -62,6 +62,18 @@ def test_disable_requires_password_and_code(client, seeded):
     assert _login(client).status_code == 200
 
 
+def test_setup_refused_while_mfa_enabled(client, seeded):
+    """Re-running setup on an MFA-enabled account must not silently rotate the
+    secret and drop the second factor; disabling first is required."""
+    headers = login(client, "admin-a@test.com")
+    secret = _enable_mfa(client, headers)
+    resp = client.post("/api/v1/auth/mfa/setup", headers=headers)
+    assert resp.status_code == 409
+    # The original factor is still in force.
+    assert _login(client).status_code == 401  # code still required
+    assert _login(client, mfa_code=pyotp.TOTP(secret).now()).status_code == 200
+
+
 def test_mfa_secret_encrypted_at_rest(client, seeded):
     headers = login(client, "admin-a@test.com")
     secret = client.post("/api/v1/auth/mfa/setup", headers=headers).json()["secret"]

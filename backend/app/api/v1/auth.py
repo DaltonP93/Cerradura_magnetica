@@ -183,6 +183,14 @@ def me(user: CurrentUser):
 def mfa_setup(user: CurrentUser, db: DbSession):
     """Generate a TOTP secret and return its provisioning URI. Not active until
     confirmed via /mfa/enable."""
+    # Never let an unauthenticated re-enrolment silently drop an active second
+    # factor: while MFA is on, the secret can only be rotated by first disabling
+    # it (which requires the current password AND a valid code).
+    if user.mfa_enabled:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "MFA is already enabled; disable it before re-enrolling.",
+        )
     secret = generate_secret()
     user.mfa_secret = secret
     user.mfa_enabled = False
