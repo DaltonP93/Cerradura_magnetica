@@ -7,11 +7,15 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from fastapi import WebSocket
+from sqlalchemy import event as sa_event
 from sqlalchemy.orm import Session
 
 from app.models import Event, EventType
 
 logger = logging.getLogger(__name__)
+
+# Key under which a session buffers event payloads awaiting its commit.
+_PENDING_KEY = "pending_event_broadcasts"
 
 
 @dataclass(eq=False)
@@ -132,6 +136,34 @@ def _event_payload(event: Event) -> dict:
     }
 
 
+def _dispatch_broadcast(organization_id: int, payload: dict) -> None:
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(manager.broadcast(organization_id, payload))
+    except RuntimeError:
+        # Worker thread (sync endpoint): hand the broadcast to the main loop.
+        if _main_loop is not None and _main_loop.is_running():
+            asyncio.run_coroutine_threadsafe(manager.broadcast(organization_id, payload), _main_loop)
+        else:
+            logger.debug("No event loop available; skipping websocket broadcast")
+
+
+@sa_event.listens_for(Session, "after_commit")
+def _flush_pending_broadcasts(session: Session) -> None:
+    """Fan out buffered events only once the transaction has actually committed."""
+    pending = session.info.pop(_PENDING_KEY, None)
+    if not pending:
+        return
+    for organization_id, payload in pending:
+        _dispatch_broadcast(organization_id, payload)
+
+
+@sa_event.listens_for(Session, "after_rollback")
+def _drop_pending_broadcasts(session: Session) -> None:
+    """A rolled-back transaction never happened: discard its would-be events."""
+    session.info.pop(_PENDING_KEY, None)
+
+
 def record_event(
     db: Session,
     *,
@@ -144,7 +176,11 @@ def record_event(
     credential_id: int | None = None,
     details: dict | None = None,
 ) -> Event:
-    """Persist an event and schedule its broadcast to live monitors."""
+    """Persist an event and queue its broadcast to live monitors.
+
+    The broadcast is deferred until the surrounding transaction commits, so a
+    later rollback never emits a phantom event that isn't actually stored.
+    """
     event = Event(
         organization_id=organization_id,
         type=type,
@@ -157,15 +193,6 @@ def record_event(
     )
     db.add(event)
     db.flush()
-
-    payload = _event_payload(event)
-    try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(manager.broadcast(organization_id, payload))
-    except RuntimeError:
-        # Worker thread (sync endpoint): hand the broadcast to the main loop.
-        if _main_loop is not None and _main_loop.is_running():
-            asyncio.run_coroutine_threadsafe(manager.broadcast(organization_id, payload), _main_loop)
-        else:
-            logger.debug("No event loop available; skipping websocket broadcast")
+    # Capture the payload now (the id is assigned at flush); fan out post-commit.
+    db.info.setdefault(_PENDING_KEY, []).append((organization_id, _event_payload(event)))
     return event
