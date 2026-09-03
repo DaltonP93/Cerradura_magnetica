@@ -23,7 +23,7 @@ from app.schemas.infrastructure import (
 from app.services import dual_approval
 from app.services.audit import record_audit
 from app.services.events import record_event
-from app.services.gateway import get_gateway
+from app.services.gateway import call_gateway, get_gateway
 
 router = APIRouter(prefix="/doors", tags=["doors"])
 
@@ -73,48 +73,59 @@ def list_open_requests(
     "/open-requests/{request_id}/approve",
     response_model=DoorOpenRequestOut,
 )
-async def approve_open_request(
+def approve_open_request(
     request_id: int, db: DbSession, org_id: OrgId, request: Request, actor: User = Operator
 ):
-    """Second-operator approval: verifies the two-person rule, then opens."""
+    """Second-operator approval: verifies the two-person rule, then opens.
+
+    The endpoint is synchronous (runs in a worker thread) and commits the
+    approval claim to release the DB connection *before* the gateway network
+    round-trip, so no transaction is held across the physical command.
+    """
+    actor_id, actor_name = actor.id, actor.full_name
     req = get_or_404(db, DoorOpenRequest, request_id, org_id)
     try:
-        dual_approval.claim_for_approval(db, request=req, approver_id=actor.id)
+        dual_approval.claim_for_approval(db, request=req, approver_id=actor_id)
     except dual_approval.DualApprovalError as exc:
         db.commit()  # persist any expiry transition recorded during the check
         raise HTTPException(exc.status_code, exc.message) from exc
 
     door = get_or_404(db, Door, req.door_id, org_id)
     controller = get_or_404(db, Controller, req.controller_id, org_id)
-    result = await get_gateway().open_door(controller, door)
+    req_id, requested_by_id = req.id, req.requested_by_id
+    door_id, door_name, controller_id = door.id, door.name, controller.id
+    # Persist the EXECUTED claim (reserving the request) and release the
+    # connection; the ORM objects are detached but keep their loaded columns.
+    db.expunge(door)
+    db.expunge(controller)
+    db.commit()
+
+    result = call_gateway(get_gateway().open_door(controller, door))
     if result.success:
         record_event(
             db,
             organization_id=org_id,
             type=EventType.REMOTE_OPEN,
-            message=f"{door.name} opened under dual approval by {actor.full_name}",
-            controller_id=controller.id,
-            door_id=door.id,
+            message=f"{door_name} opened under dual approval by {actor_name}",
+            controller_id=controller_id,
+            door_id=door_id,
             details={
-                "requested_by_id": req.requested_by_id,
-                "approved_by_id": actor.id,
+                "requested_by_id": requested_by_id,
+                "approved_by_id": actor_id,
                 "dual_approval": True,
             },
         )
     else:
-        dual_approval.mark_failed(db, request=req)
+        failed = db.get(DoorOpenRequest, req_id)
+        if failed is not None:
+            dual_approval.mark_failed(db, request=failed)
     record_audit(
         db, user=actor, action="command:dual_open_approve", resource_type="door",
-        resource_id=door.id, request=request, organization_id=org_id,
-        details={
-            "request_id": req.id,
-            "requested_by_id": req.requested_by_id,
-            "success": result.success,
-        },
+        resource_id=door_id, request=request, organization_id=org_id,
+        details={"request_id": req_id, "requested_by_id": requested_by_id, "success": result.success},
     )
     db.commit()
-    db.refresh(req)
-    return req
+    return db.get(DoorOpenRequest, req_id)
 
 
 @router.post(
@@ -158,14 +169,16 @@ def update_door(
 
 
 @router.post("/{door_id}/open", response_model=CommandResult)
-async def open_door(
+def open_door(
     door_id: int, db: DbSession, org_id: OrgId, request: Request, actor: User = Operator
 ):
     """Remote open — the 'open door' button of the original desktop software.
 
     Critical doors (``requires_dual_approval``) cannot be opened here; they
-    require the two-person request/approve workflow.
+    require the two-person request/approve workflow. Synchronous handler: the DB
+    connection is released before the gateway network round-trip.
     """
+    actor_id, actor_name = actor.id, actor.full_name
     door = get_or_404(db, Door, door_id, org_id)
     if door.requires_dual_approval:
         raise HTTPException(
@@ -173,19 +186,26 @@ async def open_door(
             "This door requires dual approval; create an open request instead.",
         )
     controller = get_or_404(db, Controller, door.controller_id, org_id)
-    result = await get_gateway().open_door(controller, door)
+    door_id_val, door_name, controller_id = door.id, door.name, controller.id
+    # Release the connection before the network round-trip; detached objects
+    # keep their loaded columns for the gateway call.
+    db.expunge(door)
+    db.expunge(controller)
+    db.commit()
+
+    result = call_gateway(get_gateway().open_door(controller, door))
     if result.success:
         record_event(
             db,
             organization_id=org_id,
             type=EventType.REMOTE_OPEN,
-            message=f"{door.name} opened remotely by {actor.full_name}",
-            controller_id=controller.id,
-            door_id=door.id,
-            details={"user_id": actor.id},
+            message=f"{door_name} opened remotely by {actor_name}",
+            controller_id=controller_id,
+            door_id=door_id_val,
+            details={"user_id": actor_id},
         )
     record_audit(db, user=actor, action="command:open_door", resource_type="door",
-                 resource_id=door.id, request=request, organization_id=org_id,
+                 resource_id=door_id_val, request=request, organization_id=org_id,
                  details={"success": result.success})
     db.commit()
     return CommandResult(success=result.success, message=result.message)
