@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.masking import mask_card
 from app.models import (
     AccessLevel,
     Cardholder,
@@ -181,7 +182,7 @@ def process_swipe(
         message = f"Access granted to {holder.full_name} at {door.name}" if holder else f"Access granted at {door.name}"
         event_type = EventType.ACCESS_GRANTED
     else:
-        who = holder.full_name if holder else f"card {card_number}"
+        who = holder.full_name if holder else f"card {mask_card(card_number)}"
         message = f"Access denied to {who} at {door.name} ({decision.reason.value if decision.reason else 'unknown'})"
         event_type = EventType.ACCESS_DENIED
 
@@ -194,6 +195,6 @@ def process_swipe(
         door_id=door.id,
         cardholder_id=holder.id if holder else None,
         credential_id=decision.credential.id if decision.credential else None,
-        details={"card_number": card_number, "reason": decision.reason.value if decision.reason else None},
+        details={"card_number": mask_card(card_number), "reason": decision.reason.value if decision.reason else None},
     )
     return decision, event.id

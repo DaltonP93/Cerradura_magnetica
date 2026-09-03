@@ -172,6 +172,16 @@ def test_swipe_events_recorded(client, admin_headers, operator_headers, setup_ac
     assert denied["items"][0]["details"]["reason"] == "unknown_credential"
 
 
+def test_event_card_number_is_masked(client, admin_headers, operator_headers, setup_access):
+    """Card numbers must be masked in events/audit (invariant #6), not stored raw."""
+    door_id = setup_access["doors"][0]["id"]
+    swipe(client, operator_headers, door_id, "99999")  # unknown card
+    denied = client.get("/api/v1/events", params={"type": "access_denied"}, headers=admin_headers).json()
+    stored = denied["items"][0]["details"]["card_number"]
+    assert stored == "*9999"
+    assert "99999" not in stored
+
+
 def test_duplicate_card_number_rejected(client, admin_headers, setup_access):
     holder_id = setup_access["holder"]["id"]
     resp = client.post(
