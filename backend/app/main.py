@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router, ws_router
 from app.core.config import get_settings
+from app.core.csrf import CSRFMiddleware
 from app.core.database import Base, engine
 from app.services.events import set_main_loop
 
@@ -35,6 +36,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# CSRF is added before CORS so that, in the final middleware stack, CORS runs
+# first (outermost) and still answers preflight requests.
+app.add_middleware(CSRFMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,

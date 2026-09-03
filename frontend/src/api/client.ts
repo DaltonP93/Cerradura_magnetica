@@ -1,30 +1,25 @@
 import axios, { AxiosError, type InternalAxiosRequestConfig } from 'axios';
-import type { TokenPair } from '../types';
 
 const BASE_URL: string = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? '';
 export const API_PREFIX = '/api/v1';
 
-// ---- Token storage ----
-const ACCESS_KEY = 'cerradura.access_token';
-const REFRESH_KEY = 'cerradura.refresh_token';
-const ORG_KEY = 'cerradura.organization_id';
+// ---- Auth model ----
+// The access and refresh JWTs live in HttpOnly cookies set by the server and
+// are never accessible to JavaScript. The only auth value JS handles is the
+// non-HttpOnly CSRF token, which we echo back on unsafe requests
+// (double-submit). `withCredentials` makes the browser attach the cookies.
+const CSRF_COOKIE = 'acp_csrf';
+const CSRF_HEADER = 'X-CSRF-Token';
+const UNSAFE_METHODS = new Set(['post', 'put', 'patch', 'delete']);
 
-export function getAccessToken(): string | null {
-  return localStorage.getItem(ACCESS_KEY);
-}
-export function getRefreshToken(): string | null {
-  return localStorage.getItem(REFRESH_KEY);
-}
-export function setTokens(pair: TokenPair): void {
-  localStorage.setItem(ACCESS_KEY, pair.access_token);
-  localStorage.setItem(REFRESH_KEY, pair.refresh_token);
-}
-export function clearTokens(): void {
-  localStorage.removeItem(ACCESS_KEY);
-  localStorage.removeItem(REFRESH_KEY);
+function readCookie(name: string): string | null {
+  const match = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
+  return match ? decodeURIComponent(match[1]) : null;
 }
 
 // ---- Organization scope (super admin) ----
+const ORG_KEY = 'cerradura.organization_id';
+
 export function getScopedOrgId(): number | null {
   const raw = localStorage.getItem(ORG_KEY);
   if (raw == null) return null;
@@ -42,15 +37,18 @@ export function enableOrgScoping(enabled: boolean): void {
   orgScopingEnabled = enabled;
 }
 
-export const api = axios.create({ baseURL: BASE_URL + API_PREFIX });
+export const api = axios.create({ baseURL: BASE_URL + API_PREFIX, withCredentials: true });
 
 // Endpoints that must never carry the organization_id query param.
 const UNSCOPED = [/^\/auth\//, /^\/organizations/];
 
 api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
-  const token = getAccessToken();
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
+  // Cookies carry authentication automatically; here we only add the CSRF
+  // double-submit header for state-changing requests.
+  const method = (config.method ?? 'get').toLowerCase();
+  if (UNSAFE_METHODS.has(method)) {
+    const csrf = readCookie(CSRF_COOKIE);
+    if (csrf) config.headers[CSRF_HEADER] = csrf;
   }
   const url = config.url ?? '';
   if (orgScopingEnabled && !UNSCOPED.some((re) => re.test(url))) {
@@ -63,24 +61,28 @@ api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
 });
 
 // ---- 401 -> refresh once -> retry ----
-let refreshPromise: Promise<string | null> | null = null;
+let refreshPromise: Promise<boolean> | null = null;
 
-async function tryRefresh(): Promise<string | null> {
-  const refreshToken = getRefreshToken();
-  if (!refreshToken) return null;
+async function tryRefresh(): Promise<boolean> {
   try {
-    const { data } = await axios.post<TokenPair>(`${BASE_URL}${API_PREFIX}/auth/refresh`, {
-      refresh_token: refreshToken,
-    });
-    setTokens(data);
-    return data.access_token;
+    // The refresh token rides in its HttpOnly cookie; the body is empty.
+    await axios.post(
+      `${BASE_URL}${API_PREFIX}/auth/refresh`,
+      {},
+      { withCredentials: true, headers: csrfHeader() },
+    );
+    return true;
   } catch {
-    return null;
+    return false;
   }
 }
 
+function csrfHeader(): Record<string, string> {
+  const csrf = readCookie(CSRF_COOKIE);
+  return csrf ? { [CSRF_HEADER]: csrf } : {};
+}
+
 function redirectToLogin(): void {
-  clearTokens();
   if (!window.location.pathname.startsWith('/login')) {
     window.location.href = '/login';
   }
@@ -97,9 +99,8 @@ api.interceptors.response.use(
     if (status === 401 && original && !original._retried && !isAuthCall) {
       original._retried = true;
       refreshPromise = refreshPromise ?? tryRefresh().finally(() => setTimeout(() => (refreshPromise = null), 0));
-      const newToken = await refreshPromise;
-      if (newToken) {
-        original.headers.Authorization = `Bearer ${newToken}`;
+      const ok = await refreshPromise;
+      if (ok) {
         return api.request(original);
       }
       redirectToLogin();
@@ -128,10 +129,12 @@ export function apiErrorMessage(err: unknown): string {
   return 'Error inesperado';
 }
 
-/** Build the WebSocket URL for the live event stream. */
+/**
+ * Build the WebSocket URL for the live event stream. The socket authenticates
+ * via the HttpOnly access cookie sent in the handshake, so no token travels in
+ * the URL.
+ */
 export function buildEventsWsUrl(): string | null {
-  const token = getAccessToken();
-  if (!token) return null;
   let base: string;
   if (BASE_URL) {
     base = BASE_URL.replace(/^http/, 'ws');
@@ -139,10 +142,10 @@ export function buildEventsWsUrl(): string | null {
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     base = `${proto}//${window.location.host}`;
   }
-  let url = `${base}/ws/events?token=${encodeURIComponent(token)}`;
+  let url = `${base}/ws/events`;
   if (orgScopingEnabled) {
     const orgId = getScopedOrgId();
-    if (orgId != null) url += `&organization_id=${orgId}`;
+    if (orgId != null) url += `?organization_id=${orgId}`;
   }
   return url;
 }

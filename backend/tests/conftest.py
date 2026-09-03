@@ -15,6 +15,9 @@ os.environ.setdefault("ACP_WS_REVALIDATE_SECONDS", "1")
 # Disable the auth IP rate limiter by default; the suite performs many logins.
 # The dedicated rate-limit test enables it locally.
 os.environ.setdefault("ACP_AUTH_RATE_LIMIT_PER_MINUTE", "0")
+# The TestClient speaks http://testserver, so Secure cookies would be withheld.
+# Relax the Secure flag for tests only (production keeps it on).
+os.environ.setdefault("ACP_COOKIE_SECURE", "false")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -35,6 +38,16 @@ def clean_db():
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_client_cookies(client):
+    # Login now also sets HttpOnly cookies. The session-scoped TestClient keeps
+    # a cookie jar, so clear it between tests to keep bearer-based tests free of
+    # ambient cookie authentication leaking across tests.
+    client.cookies.clear()
+    yield
+    client.cookies.clear()
 
 
 @pytest.fixture

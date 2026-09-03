@@ -35,6 +35,15 @@ class Settings(BaseSettings):
     # CORS
     cors_origins: str = "http://localhost:5173,http://localhost:3000"
 
+    # Auth cookies. Browser sessions carry the JWTs in HttpOnly cookies (never
+    # in JS-readable storage); a companion non-HttpOnly CSRF token guards
+    # cookie-authenticated state-changing requests (double-submit pattern).
+    # `cookie_secure` must stay true in production (HTTPS only); it may be
+    # relaxed for local http development.
+    cookie_secure: bool = True
+    cookie_samesite: str = "lax"  # lax | strict | none
+    cookie_domain: str | None = None
+
     # Hardware gateway: "simulated" runs an in-process L04 simulator,
     # "tcp" talks to real boards on the network.
     gateway_mode: str = "simulated"
@@ -79,6 +88,10 @@ class Settings(BaseSettings):
             issues.append("ACP_FIRST_SUPERUSER_PASSWORD must be changed from its default")
         if self.debug:
             issues.append("ACP_DEBUG must be false in production")
+        if not self.cookie_secure:
+            issues.append("ACP_COOKIE_SECURE must be true in production (cookies over HTTPS only)")
+        if self.cookie_samesite.lower() == "none" and not self.cookie_secure:
+            issues.append("SameSite=None cookies require ACP_COOKIE_SECURE=true")
         return issues
 
     @model_validator(mode="after")

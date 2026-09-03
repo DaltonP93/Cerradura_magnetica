@@ -19,6 +19,7 @@ def _prod(**overrides) -> dict:
         "secret_key": STRONG_SECRET,
         "first_superuser_password": STRONG_PASSWORD,
         "debug": False,
+        "cookie_secure": True,
     }
     base.update(overrides)
     return base
@@ -49,6 +50,11 @@ def test_production_rejects_default_superuser_password():
 def test_production_rejects_debug_true():
     with pytest.raises(ValidationError):
         Settings(**_prod(debug=True))
+
+
+def test_production_rejects_insecure_cookies():
+    with pytest.raises(ValidationError):
+        Settings(**_prod(cookie_secure=False))
 
 
 def test_production_accepts_strong_config():

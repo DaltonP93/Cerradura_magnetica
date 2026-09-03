@@ -19,7 +19,9 @@ class TokenPair(BaseModel):
 
 
 class RefreshRequest(BaseModel):
-    refresh_token: str
+    # Optional: browser clients carry the refresh token in an HttpOnly cookie,
+    # so the body may be empty. Programmatic clients may still send it here.
+    refresh_token: str | None = None
 
 
 class UserOut(ORMModel):

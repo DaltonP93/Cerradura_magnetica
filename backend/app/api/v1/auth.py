@@ -2,11 +2,18 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 import jwt as pyjwt
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 
 from app.core.config import get_settings
+from app.core.cookies import (
+    ACCESS_COOKIE,
+    REFRESH_COOKIE,
+    clear_auth_cookies,
+    new_csrf_token,
+    set_auth_cookies,
+)
 from app.core.deps import CurrentUser, DbSession
 from app.core.ratelimit import rate_limit_auth
 from app.core.security import decode_token, hash_password, verify_password
@@ -40,7 +47,7 @@ def _as_utc(dt: datetime | None) -> datetime | None:
 
 
 @router.post("/login", response_model=TokenPair, dependencies=[Depends(rate_limit_auth)])
-def login(body: LoginRequest, db: DbSession, request: Request):
+def login(body: LoginRequest, db: DbSession, request: Request, response: Response):
     user = db.execute(select(User).where(User.email == body.email.lower())).scalar_one_or_none()
     now = datetime.now(UTC)
 
@@ -92,13 +99,21 @@ def login(body: LoginRequest, db: DbSession, request: Request):
     user.last_login_at = now
     record_audit(db, user=user, action="login", resource_type="user", resource_id=user.id, request=request)
     db.commit()
+    # Browser sessions carry the tokens in HttpOnly cookies; the body is kept
+    # for programmatic clients.
+    set_auth_cookies(response, access=access_token, refresh=refresh_token, csrf=new_csrf_token())
     return TokenPair(access_token=access_token, refresh_token=refresh_token)
 
 
 @router.post("/refresh", response_model=TokenPair, dependencies=[Depends(rate_limit_auth)])
-def refresh(body: RefreshRequest, db: DbSession):
+def refresh(body: RefreshRequest, db: DbSession, request: Request, response: Response):
+    # Prefer the body token (programmatic clients); fall back to the HttpOnly
+    # refresh cookie (browser clients).
+    presented = body.refresh_token or request.cookies.get(REFRESH_COOKIE)
+    if not presented:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "No refresh token provided")
     try:
-        payload = decode_token(body.refresh_token, "refresh")
+        payload = decode_token(presented, "refresh")
     except pyjwt.InvalidTokenError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired refresh token") from exc
 
@@ -108,7 +123,7 @@ def refresh(body: RefreshRequest, db: DbSession):
 
     try:
         access_token, refresh_token = sessions.rotate_refresh(
-            db, session_id, body.refresh_token, int(payload["sub"])
+            db, session_id, presented, int(payload["sub"])
         )
     except sessions.SessionError as exc:
         if exc.reuse and exc.session_id:
@@ -121,21 +136,27 @@ def refresh(body: RefreshRequest, db: DbSession):
         db.commit()  # persist any family revocation triggered above
         if exc.session_id:
             manager.close_session(exc.session_id)  # tear down live sockets on reuse
+        # A rejected refresh clears the browser's stale cookies.
+        clear_auth_cookies(response)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, exc.message) from exc
 
     db.commit()
+    set_auth_cookies(response, access=access_token, refresh=refresh_token, csrf=new_csrf_token())
     return TokenPair(access_token=access_token, refresh_token=refresh_token)
 
 
 @router.post("/logout", response_model=Message)
 def logout(
+    request: Request,
+    response: Response,
     db: DbSession,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
 ):
     """Revoke the session behind the presented access token (idempotent)."""
-    if credentials is not None:
+    token = credentials.credentials if credentials is not None else request.cookies.get(ACCESS_COOKIE)
+    if token:
         try:
-            payload = decode_token(credentials.credentials, "access")
+            payload = decode_token(token, "access")
         except pyjwt.InvalidTokenError:
             payload = None
         if payload and payload.get("sid"):
@@ -148,6 +169,8 @@ def logout(
                 )
                 db.commit()
                 manager.close_session(session.session_id)
+    # Always clear the browser's auth cookies, even for an already-dead session.
+    clear_auth_cookies(response)
     return Message(detail="Logged out")
 
 

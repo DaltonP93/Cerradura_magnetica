@@ -18,6 +18,7 @@ import jwt as pyjwt
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, status
 
 from app.core.config import get_settings
+from app.core.cookies import ACCESS_COOKIE
 from app.core.database import SessionLocal
 from app.core.security import decode_token
 from app.models import User, UserRole
@@ -68,10 +69,17 @@ def _still_live(session_id: str, user_id: int) -> bool:
 @router.websocket("/ws/events")
 async def events_ws(
     websocket: WebSocket,
-    token: str = Query(...),
+    token: str | None = Query(default=None),
     organization_id: int | None = Query(default=None),
 ):
-    identity = _authenticate(token, organization_id)
+    # Browsers authenticate the socket via the HttpOnly access cookie sent in
+    # the handshake, so the token no longer needs to travel in the URL. A query
+    # token is still accepted for non-browser clients.
+    presented = token or websocket.cookies.get(ACCESS_COOKIE)
+    if not presented:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+    identity = _authenticate(presented, organization_id)
     if identity is None:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
