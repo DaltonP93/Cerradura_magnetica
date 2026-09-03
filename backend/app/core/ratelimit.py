@@ -22,10 +22,18 @@ class RateLimiter:
         self.window = window_seconds
         self._hits: dict[str, list[float]] = defaultdict(list)
         self._lock = threading.Lock()
+        self._last_sweep = time.monotonic()
 
     def reset(self) -> None:
         with self._lock:
             self._hits.clear()
+            self._last_sweep = time.monotonic()
+
+    def _sweep(self, cutoff: float) -> None:
+        """Drop keys whose window is empty so idle IPs don't accumulate."""
+        stale = [k for k, hits in self._hits.items() if not [t for t in hits if t >= cutoff]]
+        for k in stale:
+            del self._hits[k]
 
     def allow(self, key: str) -> bool:
         if self.limit <= 0:  # disabled
@@ -33,6 +41,10 @@ class RateLimiter:
         now = time.monotonic()
         cutoff = now - self.window
         with self._lock:
+            # Periodically evict idle keys to bound memory under many client IPs.
+            if now - self._last_sweep >= self.window:
+                self._sweep(cutoff)
+                self._last_sweep = now
             hits = self._hits[key]
             hits[:] = [t for t in hits if t >= cutoff]
             if len(hits) >= self.limit:

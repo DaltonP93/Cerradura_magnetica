@@ -2,11 +2,12 @@
 
 Phase 1 item 7 (rate limiting + lockout; MFA is separate).
 """
+import time
 from datetime import UTC, datetime, timedelta
 
 from app.core.config import get_settings
 from app.core.database import SessionLocal
-from app.core.ratelimit import auth_limiter
+from app.core.ratelimit import RateLimiter, auth_limiter
 from app.models import User
 
 settings = get_settings()
@@ -62,6 +63,19 @@ def test_successful_login_resets_failed_count(client, seeded):
     assert _user().failed_login_count == settings.login_max_attempts - 1
     assert _good_login(client).status_code == 200
     assert _user().failed_login_count == 0
+
+
+def test_rate_limiter_evicts_idle_keys():
+    """Idle client keys must not accumulate forever in the in-memory limiter."""
+    rl = RateLimiter(limit=5, window_seconds=60)
+    rl.allow("a")
+    assert "a" in rl._hits
+    # Make key "a" fully expired and force the next call past the sweep interval.
+    rl._hits["a"][:] = [time.monotonic() - 120]
+    rl._last_sweep = time.monotonic() - 120
+    rl.allow("b")  # triggers a sweep
+    assert "a" not in rl._hits
+    assert "b" in rl._hits
 
 
 def test_auth_rate_limit_throttles_by_ip(client, seeded):
