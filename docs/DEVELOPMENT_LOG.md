@@ -539,5 +539,62 @@ Puntos detectados durante la reconstrucción, para que el líder decida:
 
 ---
 
+## 8. Remediación post-auditoría (ronda de revisión con agentes)
+
+Tras cerrar la Fase 1 se corrió una **ronda de auditoría con cuatro roles** (seguridad, DevOps,
+arquitectura/desarrollo y documentación) sobre `claude/develop`. El líder consolidó los hallazgos y
+aplicó la remediación como PRs chicos, cada uno con tests y CI verde (SQLite + PostgreSQL). Ningún
+hallazgo comprometía el aislamiento multi-tenant ni filtraba el PIN (viaja cifrado).
+
+### 8.1 Hallazgos críticos de seguridad (corregidos primero)
+
+| Sev | Hallazgo | Fix | Commit |
+|---|---|---|---|
+| 🔴 P1 | Un admin de organización podía **secuestrar al super_admin** (el seed lo creaba dentro de una org y `update_user` solo bloqueaba *otorgar* super_admin) | Super admin platform-level (`organization_id=None`) + guarda: un no-super-admin nunca resuelve un super_admin en `_get_scoped_user` | `b6690ff` |
+| 🟠 P2 | `/auth/mfa/setup` rotaba el secreto y ponía `mfa_enabled=False` **sin re-auth** (una sesión robada apagaba el 2FA) | `setup` responde 409 mientras MFA está activa; rotar exige desactivar antes (contraseña + código) | `b6690ff` |
+| 🔴 P1 | Credencial tipo `PIN` se concedía **sin PIN** (el motor solo validaba PIN en `CARD_PLUS_PIN`) — viola invariante #3 | Ambos tipos exigen PIN, con comparación en tiempo constante | `511d648` |
+
+### 8.2 Backlog de correctitud/robustez
+
+| Tema | Fix | Commit |
+|---|---|---|
+| Nº de tarjeta en claro en eventos/auditoría (invariante #6) | Enmascarado a últimos 4 (`core/masking.py`); el nº real se recupera vía `credential_id` | `d05bf8f` |
+| Eventos difundidos en el `flush` → evento fantasma si hay rollback | Difusión en `after_commit`, descarte en `after_rollback` | `5a95982` |
+| Consulta caliente de eventos sin índice | Índice compuesto `events(organization_id, occurred_at)` — migración `f5a6b7c8d9e0` | `cb2f96b` |
+| Rate-limiter en memoria acumulaba una entrada por IP | Purga periódica de claves inactivas | `878b7e0` |
+| Reconexión WS infinita ante sesión revocada | Corte en cierre 1008 + tope de reintentos (frontend) | `ed91d2b` |
+| Desfase de zona horaria: acceso en zona del sitio, asistencia en UTC | Reporte de asistencia con `timezone` explícito (IANA, default UTC); marca UTC→local antes de agrupar; `tzdata` pinneado; fichaje manual convierte aware→UTC | `15a8242` |
+
+### 8.3 Endurecimiento de despliegue (DevOps)
+
+`6d0f124` y `daaa95e`: relación `cookie_secure`↔HTTPS documentada + `frontend/nginx.tls.conf`
+(terminación TLS); `uvicorn --proxy-headers` (IP real para el rate-limit); backend como usuario
+**no-root**; cabeceras de seguridad en Nginx (HSTS, X-Frame-Options, CSP…); endpoint de
+**readiness** `/health/ready`; script de backup `scripts/backup_db.sh`; guardas de CI (single-head
+de Alembic y `npm audit` de deps de producción); guía `docs/DEPLOYMENT.md`.
+
+### 8.4 Deuda de arquitectura saldada
+
+`7bbd518` — **refactor async/tx**: los endpoints que hablan con el gateway (`doors`: open y approve;
+`controllers`: ping, sync-time, sync-permissions) pasaron a `def` (threadpool, sin bloquear el event
+loop) y **liberan la transacción antes de la llamada de red** al gateway (comando físico desacoplado
+de la transacción; en doble aprobación el claim `EXECUTED` se persiste antes de la red). Helper
+`call_gateway()` para invocar el gateway async desde el endpoint sync. Comportamiento idéntico.
+
+### 8.5 Estado de la cadena Alembic (actualizado)
+
+`… → e4f5a6b7c8d9` (dual approval) `→ f5a6b7c8d9e0` (índice de eventos). Head único, lineal.
+
+### 8.6 Pendiente tras esta ronda
+
+- **Fase 2 (codec del protocolo N3000)** — a la espera del spec real (frames de 64B, códigos de
+  función, vectores hex/PCAP anonimizados). No se inventan tramas.
+- **Flags avanzados de puerta en el motor** (anti-passback, interlock, multi-card, first-card-open):
+  requieren **estado en tiempo real**; se difieren a Fase 4 y no se aproximan de forma stateless para
+  no dar falsa sensación de enforcement.
+- Fases 3–7 restantes, con validación de hardware explícitamente pendiente.
+
+---
+
 *Fin del documento. Mantener actualizado a medida que avancen las fases. Producido por el rol de
-Documentación; pendiente de revisión e integración por el Líder.*
+Documentación y mantenido por el Líder.*
