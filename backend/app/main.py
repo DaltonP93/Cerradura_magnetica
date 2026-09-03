@@ -2,13 +2,15 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
+from sqlalchemy.orm import Session
 
 from app.api.router import api_router, ws_router
 from app.core.config import get_settings
 from app.core.csrf import CSRFMiddleware
-from app.core.database import Base, engine
+from app.core.database import Base, engine, get_db
 from app.services.events import set_main_loop
 
 logging.basicConfig(level=logging.INFO)
@@ -53,4 +55,15 @@ app.include_router(ws_router)
 
 @app.get("/health", tags=["health"])
 def health():
+    """Liveness: the process is up (no dependency checks)."""
     return {"status": "ok", "app": settings.app_name, "environment": settings.environment}
+
+
+@app.get("/health/ready", tags=["health"])
+def readiness(db: Session = Depends(get_db)):
+    """Readiness: the app can serve traffic, i.e. the database is reachable."""
+    try:
+        db.execute(text("SELECT 1"))
+    except Exception as exc:  # noqa: BLE001 - report any DB failure as not-ready
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "database unavailable") from exc
+    return {"status": "ready"}
