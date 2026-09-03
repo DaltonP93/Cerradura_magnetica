@@ -13,11 +13,12 @@ from app.models.base import (
     CredentialType,
     DeniedReason,
     DoorMode,
+    DoorOpenRequestStatus,
     EventType,
     UserRole,
 )
 from app.models.events import AuditLog, Event
-from app.models.infrastructure import Controller, Door, Site
+from app.models.infrastructure import Controller, Door, DoorOpenRequest, Site
 from app.models.people import Cardholder, Credential, Department
 from app.models.tenancy import Organization, User
 
@@ -36,6 +37,8 @@ __all__ = [
     "Department",
     "Door",
     "DoorMode",
+    "DoorOpenRequest",
+    "DoorOpenRequestStatus",
     "Event",
     "EventType",
     "Holiday",

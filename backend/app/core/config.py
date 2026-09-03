@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     login_lockout_minutes: int = 15
     auth_rate_limit_per_minute: int = 30
 
+    # Two-person rule: a pending remote-open request on a critical door must be
+    # approved by a second operator within this window before it expires.
+    dual_approval_ttl_seconds: int = 300
+
     # Initial super admin (created by the seed command if no users exist)
     first_superuser_email: str = "admin@example.com"
     first_superuser_password: str = DEFAULT_SUPERUSER_PASSWORD

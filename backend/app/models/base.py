@@ -44,6 +44,16 @@ class DoorMode(str, enum.Enum):
     NORMALLY_CLOSED = "normally_closed"  # always locked, remote open only
 
 
+class DoorOpenRequestStatus(str, enum.Enum):
+    """Lifecycle of a dual-approval remote-open request (two-person rule)."""
+
+    PENDING = "pending"        # awaiting a second, distinct approver
+    EXECUTED = "executed"      # approved and the gateway opened the door
+    REJECTED = "rejected"      # cancelled before execution
+    EXPIRED = "expired"        # approval window elapsed
+    FAILED = "failed"          # approved, but the gateway command failed
+
+
 class CredentialType(str, enum.Enum):
     CARD = "card"
     PIN = "pin"

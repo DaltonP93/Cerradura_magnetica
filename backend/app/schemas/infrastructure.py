@@ -2,7 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from app.models.base import ControllerStatus, DoorMode
+from app.models.base import ControllerStatus, DoorMode, DoorOpenRequestStatus
 from app.schemas.common import ORMModel
 
 
@@ -40,6 +40,7 @@ class DoorOut(ORMModel):
     anti_passback: bool
     first_card_open: bool
     multi_card_count: int
+    requires_dual_approval: bool
 
 
 class DoorUpdate(BaseModel):
@@ -51,6 +52,25 @@ class DoorUpdate(BaseModel):
     anti_passback: bool | None = None
     first_card_open: bool | None = None
     multi_card_count: int | None = Field(default=None, ge=1, le=4)
+    requires_dual_approval: bool | None = None
+
+
+# --- Dual-approval remote open ---
+class DoorOpenRequestCreate(BaseModel):
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class DoorOpenRequestOut(ORMModel):
+    id: int
+    door_id: int
+    controller_id: int
+    requested_by_id: int | None
+    approved_by_id: int | None
+    status: DoorOpenRequestStatus
+    reason: str | None
+    created_at: datetime
+    expires_at: datetime
+    resolved_at: datetime | None
 
 
 # --- Controllers ---
