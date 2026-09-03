@@ -10,8 +10,18 @@ from app.core.config import get_settings
 from app.core.deps import CurrentUser, DbSession
 from app.core.ratelimit import rate_limit_auth
 from app.core.security import decode_token, hash_password, verify_password
+from app.core.totp import generate_secret, provisioning_uri, verify_code
 from app.models import User
-from app.schemas.auth import ChangePasswordRequest, LoginRequest, RefreshRequest, TokenPair, UserOut
+from app.schemas.auth import (
+    ChangePasswordRequest,
+    LoginRequest,
+    MfaDisableRequest,
+    MfaSetupResponse,
+    MfaVerifyRequest,
+    RefreshRequest,
+    TokenPair,
+    UserOut,
+)
 from app.schemas.common import Message
 from app.services import sessions
 from app.services.audit import record_audit
@@ -60,6 +70,19 @@ def login(body: LoginRequest, db: DbSession, request: Request):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "User account is disabled")
     if not sessions.organization_active(db, user):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Organization is suspended")
+
+    # Second factor, if enabled. A missing code is a two-step prompt (not a
+    # failed attempt); a wrong code counts toward the lockout.
+    if user.mfa_enabled:
+        if not body.mfa_code:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "MFA code required")
+        if not verify_code(user.mfa_secret, body.mfa_code):
+            user.failed_login_count += 1
+            if user.failed_login_count >= settings.login_max_attempts:
+                user.locked_until = now + timedelta(minutes=settings.login_lockout_minutes)
+                user.failed_login_count = 0
+            db.commit()
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid MFA code")
 
     # A successful login clears any accumulated failure state.
     user.failed_login_count = 0
@@ -131,6 +154,42 @@ def logout(
 @router.get("/me", response_model=UserOut)
 def me(user: CurrentUser):
     return user
+
+
+@router.post("/mfa/setup", response_model=MfaSetupResponse)
+def mfa_setup(user: CurrentUser, db: DbSession):
+    """Generate a TOTP secret and return its provisioning URI. Not active until
+    confirmed via /mfa/enable."""
+    secret = generate_secret()
+    user.mfa_secret = secret
+    user.mfa_enabled = False
+    db.commit()
+    return MfaSetupResponse(secret=secret, provisioning_uri=provisioning_uri(secret, user.email))
+
+
+@router.post("/mfa/enable", response_model=Message)
+def mfa_enable(body: MfaVerifyRequest, user: CurrentUser, db: DbSession, request: Request):
+    if not user.mfa_secret:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Start MFA setup first")
+    if not verify_code(user.mfa_secret, body.code):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid MFA code")
+    user.mfa_enabled = True
+    record_audit(db, user=user, action="mfa_enabled", resource_type="user", resource_id=user.id, request=request)
+    db.commit()
+    return Message(detail="MFA enabled")
+
+
+@router.post("/mfa/disable", response_model=Message)
+def mfa_disable(body: MfaDisableRequest, user: CurrentUser, db: DbSession, request: Request):
+    if not verify_password(body.password, user.hashed_password):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Current password is incorrect")
+    if not user.mfa_enabled or not verify_code(user.mfa_secret, body.code):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid MFA code")
+    user.mfa_enabled = False
+    user.mfa_secret = None
+    record_audit(db, user=user, action="mfa_disabled", resource_type="user", resource_id=user.id, request=request)
+    db.commit()
+    return Message(detail="MFA disabled")
 
 
 @router.post("/change-password", response_model=Message)
