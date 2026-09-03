@@ -176,6 +176,44 @@ def test_rest_day_without_shift_day(client, admin_headers, seeded):
     assert body["rows"][0]["statuses"] == ["rest_day"]
 
 
+def test_report_respects_timezone(client, admin_headers, seeded, staff):
+    """Punches (stored UTC) are shown and judged in the requested timezone."""
+    day = date.today() - timedelta(days=1)
+    holder_id = staff["holder"]["id"]
+    # 12:30 UTC == 09:30 in America/Argentina/Buenos_Aires (UTC-3).
+    add_punch(seeded["org_a"], holder_id, datetime.combine(day, time(12, 30)))
+    tz = "America/Argentina/Buenos_Aires"
+
+    row = report(client, admin_headers, day, cardholder_id=holder_id, timezone=tz)["rows"][0]
+    assert row["check_in"].endswith("09:30:00")  # local time, not 12:30 UTC
+    assert "late" in row["statuses"]  # 09:30 is past the 09:10 tolerance
+
+    # Same data in UTC keeps the raw 12:30.
+    utc_row = report(client, admin_headers, day, cardholder_id=holder_id)["rows"][0]
+    assert utc_row["check_in"].endswith("12:30:00")
+
+
+def test_report_timezone_day_boundary(client, admin_headers, seeded, staff):
+    """A punch after midnight UTC still belongs to the previous local day."""
+    day = date.today() - timedelta(days=1)
+    holder_id = staff["holder"]["id"]
+    # 01:00 UTC on day+1 == 22:00 on `day` in UTC-3.
+    add_punch(seeded["org_a"], holder_id, datetime.combine(day + timedelta(days=1), time(1, 0)))
+    tz = "America/Argentina/Buenos_Aires"
+    row = report(client, admin_headers, day, cardholder_id=holder_id, timezone=tz)["rows"][0]
+    assert row["check_in"].endswith("22:00:00")
+
+
+def test_report_invalid_timezone(client, admin_headers, staff):
+    day = date.today() - timedelta(days=1)
+    resp = client.get(
+        "/api/v1/attendance/report",
+        params={"date_from": day.isoformat(), "date_to": day.isoformat(), "timezone": "Not/AZone"},
+        headers=admin_headers,
+    )
+    assert resp.status_code == 400
+
+
 def test_report_range_limit(client, admin_headers, staff):
     resp = client.get(
         "/api/v1/attendance/report",

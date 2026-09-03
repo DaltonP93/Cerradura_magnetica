@@ -3,10 +3,16 @@
 For each cardholder and day in the range, punches are gathered from access
 events (granted swipes) and manual signs. The first punch of the day is the
 check-in and the last one the check-out. The cardholder's shift determines
-workdays, expected times and tolerances. Days are evaluated in UTC.
+workdays, expected times and tolerances.
+
+Punches are stored in UTC; the report evaluates them in an explicit timezone
+(``timezone``, IANA name, default UTC) so that day boundaries and the shift's
+wall-clock times line up with the site's local time — consistent with how the
+access engine evaluates schedules in the site's timezone.
 """
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -25,8 +31,10 @@ class DayRow:
     statuses: list[str]
 
 
-def _naive(dt: datetime) -> datetime:
-    return dt.replace(tzinfo=None) if dt.tzinfo else dt
+def _to_local(dt: datetime, tz: ZoneInfo) -> datetime:
+    """Interpret a stored timestamp as UTC and express it as naive local time."""
+    aware = dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+    return aware.astimezone(tz).replace(tzinfo=None)
 
 
 def compute_attendance(
@@ -37,11 +45,16 @@ def compute_attendance(
     date_to: date,
     department_id: int | None = None,
     cardholder_id: int | None = None,
+    timezone: str = "UTC",
 ) -> list[DayRow]:
     if date_from > date_to:
         raise ValueError("date_from must be on or before date_to")
     if (date_to - date_from).days + 1 > MAX_RANGE_DAYS:
         raise ValueError(f"Range too large (max {MAX_RANGE_DAYS} days)")
+    try:
+        tz = ZoneInfo(timezone)
+    except (KeyError, ValueError) as exc:
+        raise ValueError(f"Unknown timezone: {timezone}") from exc
 
     holders_stmt = (
         select(Cardholder)
@@ -58,8 +71,10 @@ def compute_attendance(
         return []
     holder_ids = [h.id for h in holders]
 
-    range_start = datetime.combine(date_from, time.min)
-    range_end = datetime.combine(date_to + timedelta(days=1), time.min)
+    # Widen the UTC query window by a day on each side so every punch whose
+    # *local* date falls in range is captured regardless of the timezone offset.
+    range_start = datetime.combine(date_from - timedelta(days=1), time.min)
+    range_end = datetime.combine(date_to + timedelta(days=2), time.min)
 
     # Punches: granted access events + manual signs, grouped by (cardholder, day)
     punches: dict[tuple[int, date], list[datetime]] = {}
@@ -73,8 +88,8 @@ def compute_attendance(
         )
     )
     for holder_id, occurred_at in events:
-        occurred_at = _naive(occurred_at)
-        punches.setdefault((holder_id, occurred_at.date()), []).append(occurred_at)
+        local = _to_local(occurred_at, tz)
+        punches.setdefault((holder_id, local.date()), []).append(local)
     signs = db.execute(
         select(ManualSign.cardholder_id, ManualSign.signed_at).where(
             ManualSign.organization_id == organization_id,
@@ -84,8 +99,8 @@ def compute_attendance(
         )
     )
     for holder_id, signed_at in signs:
-        signed_at = _naive(signed_at)
-        punches.setdefault((holder_id, signed_at.date()), []).append(signed_at)
+        local = _to_local(signed_at, tz)
+        punches.setdefault((holder_id, local.date()), []).append(local)
 
     leaves: dict[int, list[Leave]] = {}
     for leave in db.execute(
