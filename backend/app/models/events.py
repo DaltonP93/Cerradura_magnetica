@@ -1,7 +1,7 @@
 """Events (real-time monitoring / history) and audit trail."""
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, Enum, ForeignKey, String
+from sqlalchemy import JSON, DateTime, Enum, ForeignKey, Index, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -10,6 +10,9 @@ from app.models.base import EventType, OrgScopedMixin, utcnow
 
 class Event(Base, OrgScopedMixin):
     __tablename__ = "events"
+    # The monitoring/history listing filters by organization and orders by time,
+    # so a composite index serves that hot query directly.
+    __table_args__ = (Index("ix_events_org_occurred", "organization_id", "occurred_at"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     type: Mapped[EventType] = mapped_column(Enum(EventType), index=True, nullable=False)
