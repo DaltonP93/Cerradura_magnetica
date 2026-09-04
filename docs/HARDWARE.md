@@ -21,7 +21,16 @@ El manual del sistema es una **guía operativa, no una especificación de protoc
 | `simulated` (por defecto) | `simulated.py` — responde siempre, ideal para demo, desarrollo y tests | ✅ Estable |
 | `tcp` | `l04_udp.py` — protocolo UDP binario de 64 bytes (puerto 60000) usado por controladoras de 4 puertas UHPPOTE-compatibles | ⚠️ **Experimental** |
 
-> **Importante**: el modo `tcp` implementa un protocolo público de placas de 4 puertas que usan el mismo puerto 60000, pero **no está verificado contra las placas N3000 de este proyecto**. Antes de usarlo en producción hay que confirmar el protocolo real con el SDK del fabricante o capturando tráfico del software legacy. Los códigos de función están centralizados como constantes `FUNC_*` en `l04_udp.py` para ajustarlos sin tocar el resto de la plataforma.
+> **Importante**: el modo `tcp` implementa un protocolo público de placas de 4 puertas que usan el mismo puerto 60000, pero **no está verificado contra las placas N3000 de este proyecto**. Antes de usarlo en producción hay que confirmar el protocolo real con el SDK del fabricante o capturando tráfico del software legacy.
+
+### Codec del protocolo (Fase 2)
+
+El **formato de la trama de 64 bytes** está aislado en el paquete puro `backend/app/services/protocol/` (sin I/O):
+
+- `frames.py`: modelo `Frame` y `encode_frame`/`decode_frame` con validación (largo 64, marcador `0x17`, serial LE, `xID`/secuencia en offset 40).
+- `codec.py`: builders/parsers por función (`FUNC_*`: status, open door, set time, put card, discover), helpers BCD/fecha y el registro de tarjeta (`CardRecord`).
+
+`l04_udp.py` es **solo transporte** (UDP async) y delega toda la codificación en este codec, que es la **única fuente de verdad** del formato y está cubierto por tests puros (`tests/test_protocol_codec.py`) con vectores hex sintéticos. Sigue siendo **experimental**: un test verde del codec **no** equivale a validación contra hardware. Las funciones cuyo layout real se desconoce para el N3000 (p. ej. perfiles horarios semanales por tarjeta) se dejan **sin implementar** en lugar de inventarse. Ajustar los códigos `FUNC_*` en `codec.py` cuando se confirme el protocolo real; el resto de la plataforma no cambia.
 
 ## Camino recomendado hacia el hardware real
 
