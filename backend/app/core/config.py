@@ -65,6 +65,11 @@ class Settings(BaseSettings):
     # approved by a second operator within this window before it expires.
     dual_approval_ttl_seconds: int = 300
 
+    # Local gateway bridge: the TLS edge validates the bridge's client
+    # certificate (mTLS) and passes its fingerprint in this header. The edge MUST
+    # set/overwrite it and strip any client-supplied value (see docs/GATEWAY_BRIDGE.md).
+    bridge_cert_header: str = "X-Client-Cert-Fingerprint"
+
     # Initial super admin (created by the seed command if no users exist)
     first_superuser_email: str = "admin@example.com"
     first_superuser_password: str = DEFAULT_SUPERUSER_PASSWORD

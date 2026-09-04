@@ -56,13 +56,43 @@ sólo define el contrato de la plataforma.
 
 La autenticación puente↔plataforma es **TLS mutuo**: el borde (Nginx/ingress,
 ver `docs/DEPLOYMENT.md`) valida el certificado de cliente del puente y pasa su
-identidad a la API. Cada puente tiene su propio certificado; revocarlo corta su
-acceso.
+**huella (fingerprint)** a la API en un header de confianza. Cada puente tiene su
+propio certificado; revocarlo o desactivar el puente corta su acceso.
+
+> **Confianza del header**: el borde **debe** setear/sobrescribir el header y
+> **descartar** cualquier valor que envíe el cliente, para que no se pueda
+> falsificar la identidad. El nombre del header es `ACP_BRIDGE_CERT_HEADER`
+> (default `X-Client-Cert-Fingerprint`).
+
+Ejemplo de Nginx (borde con verificación de cliente):
+
+```nginx
+ssl_client_certificate /etc/nginx/certs/bridge-ca.pem;   # CA que emite los certs de puente
+ssl_verify_client on;
+location /api/v1/gateway/commands/ {
+    proxy_set_header X-Client-Cert-Fingerprint $ssl_client_fingerprint;  # el borde lo fija
+    proxy_pass http://backend:8000;
+}
+```
+
+## API del puente (implementada)
+
+Registro (admin, autenticado como usuario de la plataforma):
+
+- `POST /api/v1/gateway/bridges` — alta de un puente `{name, cert_fingerprint}`
+  (la huella se normaliza: minúsculas, sin separadores). `GET` para listar.
+
+Consumo (autenticado por la huella mTLS del puente, sin sesión de usuario):
+
+- `POST /api/v1/gateway/commands/claim` — `{worker_token, controller_id?,
+  lease_seconds?, limit?}` → arrienda comandos entregables de **la organización
+  del puente** y los devuelve.
+- `POST /api/v1/gateway/commands/{id}/ack` — `{worker_token, success, result?,
+  error?}` → acusa el resultado (idempotente). Un comando de otra organización
+  responde 404 (aislamiento multi-tenant).
 
 ## Pendiente (próximos tramos)
 
-- **API orientada al puente**: `claim` / `acknowledge` sobre HTTP con la identidad
-  mTLS del puente (aún no expuesta como endpoints).
 - **Cableado del outbox** al flujo de comandos (hoy los comandos se ejecutan de
   forma síncrona contra el `ControllerGateway`; en despliegues con puente pasarían
   por el outbox). Se hará detrás de un flag, sin cambiar el modo `simulated` por

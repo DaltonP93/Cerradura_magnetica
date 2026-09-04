@@ -11,6 +11,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     DateTime,
     Enum,
     ForeignKey,
@@ -60,3 +61,22 @@ class GatewayCommand(Base, TimestampMixin, OrgScopedMixin):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     controller = relationship("Controller")
+
+
+class GatewayBridge(Base, TimestampMixin, OrgScopedMixin):
+    """A registered local bridge daemon, identified by its client-cert fingerprint.
+
+    mTLS is terminated at the edge, which passes the verified client-certificate
+    fingerprint to the API; this row maps that fingerprint to the organization
+    the bridge may serve, so a bridge only ever sees its own tenant's commands.
+    """
+
+    __tablename__ = "gateway_bridges"
+    __table_args__ = (UniqueConstraint("cert_fingerprint", name="uq_gateway_bridge_fp"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    # Normalized (lowercase, no separators) SHA-256 fingerprint of the client cert.
+    cert_fingerprint: Mapped[str] = mapped_column(String(128), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
