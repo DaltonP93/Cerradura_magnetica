@@ -48,10 +48,11 @@ class DoorOpenRequestStatus(str, enum.Enum):
     """Lifecycle of a dual-approval remote-open request (two-person rule)."""
 
     PENDING = "pending"        # awaiting a second, distinct approver
-    EXECUTED = "executed"      # approved and the gateway opened the door
+    DISPATCHED = "dispatched"  # approved and queued to the local bridge (async)
+    EXECUTED = "executed"      # approved and the door was opened
     REJECTED = "rejected"      # cancelled before execution
     EXPIRED = "expired"        # approval window elapsed
-    FAILED = "failed"          # approved, but the gateway command failed
+    FAILED = "failed"          # approved, but the open command failed
 
 
 class GatewayCommandType(str, enum.Enum):

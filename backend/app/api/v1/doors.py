@@ -84,9 +84,11 @@ def approve_open_request(
     round-trip, so no transaction is held across the physical command.
     """
     actor_id, actor_name = actor.id, actor.full_name
+    bridge = command_dispatch.bridge_mode()
+    target = DoorOpenRequestStatus.DISPATCHED if bridge else DoorOpenRequestStatus.EXECUTED
     req = get_or_404(db, DoorOpenRequest, request_id, org_id)
     try:
-        dual_approval.claim_for_approval(db, request=req, approver_id=actor_id)
+        dual_approval.claim_for_approval(db, request=req, approver_id=actor_id, target_status=target)
     except dual_approval.DualApprovalError as exc:
         db.commit()  # persist any expiry transition recorded during the check
         raise HTTPException(exc.status_code, exc.message) from exc
@@ -95,8 +97,31 @@ def approve_open_request(
     controller = get_or_404(db, Controller, req.controller_id, org_id)
     req_id, requested_by_id = req.id, req.requested_by_id
     door_id, door_name, controller_id = door.id, door.name, controller.id
-    # Persist the EXECUTED claim (reserving the request) and release the
-    # connection; the ORM objects are detached but keep their loaded columns.
+
+    if bridge:
+        # Two-person rule satisfied and reserved (DISPATCHED); queue the open for
+        # the bridge. The REMOTE_OPEN event and the final EXECUTED/FAILED status
+        # are applied when the bridge acknowledges the command.
+        command = command_dispatch.enqueue_command(
+            db, organization_id=org_id, controller_id=controller_id,
+            type=GatewayCommandType.OPEN_DOOR,
+            payload={
+                "door": door.number, "door_id": door_id,
+                "open_request_id": req_id, "requested_by_id": requested_by_id,
+                "approved_by_id": actor_id,
+            },
+        )
+        record_audit(
+            db, user=actor, action="command:dual_open_approve", resource_type="door",
+            resource_id=door_id, request=request, organization_id=org_id,
+            details={"request_id": req_id, "requested_by_id": requested_by_id,
+                     "queued": True, "command_id": command.id},
+        )
+        db.commit()
+        return db.get(DoorOpenRequest, req_id)
+
+    # Direct path: persist the EXECUTED claim (reserving the request) and release
+    # the connection; the ORM objects are detached but keep their loaded columns.
     db.expunge(door)
     db.expunge(controller)
     db.commit()

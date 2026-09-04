@@ -73,13 +73,16 @@ def _active_pending(db: Session, *, org_id: int, door_id: int, now: datetime) ->
 
 
 def claim_for_approval(
-    db: Session, *, request: DoorOpenRequest, approver_id: int
+    db: Session, *, request: DoorOpenRequest, approver_id: int,
+    target_status: DoorOpenRequestStatus = DoorOpenRequestStatus.EXECUTED,
 ) -> None:
-    """Atomically transition PENDING -> EXECUTED for this approver.
+    """Atomically transition PENDING -> ``target_status`` for this approver.
 
-    The row is optimistically marked executed; :func:`mark_failed` reverts it to
-    FAILED if the subsequent gateway command does not succeed. Raises on any
-    condition that forbids approval (self-approval, expiry, already resolved).
+    ``target_status`` is EXECUTED for the synchronous (direct) path and
+    DISPATCHED for the bridge path (the open is then finalised on the bridge's
+    ack). Terminal targets stamp ``resolved_at``; DISPATCHED leaves it null.
+    Raises on any condition that forbids approval (self-approval, expiry,
+    already resolved).
     """
     now = datetime.now(UTC)
     if request.requested_by_id is not None and request.requested_by_id == approver_id:
@@ -101,6 +104,7 @@ def claim_for_approval(
         )
         raise DualApprovalError("Request has expired.", status_code=410)
 
+    resolved_at = None if target_status == DoorOpenRequestStatus.DISPATCHED else now
     # Compare-and-set: only one approver may win the transition out of PENDING.
     result = db.execute(
         update(DoorOpenRequest)
@@ -110,9 +114,9 @@ def claim_for_approval(
             DoorOpenRequest.expires_at > now,
         )
         .values(
-            status=DoorOpenRequestStatus.EXECUTED,
+            status=target_status,
             approved_by_id=approver_id,
-            resolved_at=now,
+            resolved_at=resolved_at,
         )
         .execution_options(synchronize_session=False)
     )

@@ -121,9 +121,18 @@ plataforma aplica el efecto correspondiente **una sola vez** (en la transición)
 
 Un re-ack no duplica el efecto (idempotente).
 
+## Doble aprobación por outbox (implementado)
+
+En modo `bridge`, la aprobación de una puerta crítica satisface la regla de dos
+personas y **reserva** la solicitud en el estado intermedio `DISPATCHED` (con un
+CAS atómico, igual que en el camino directo), y **encola** el `OPEN_DOOR` ligado
+al `open_request_id`. La apertura física no ocurre aún: cuando el puente acusa el
+comando, el efecto finaliza la solicitud a `EXECUTED` (registrando el evento
+`REMOTE_OPEN` con `dual_approval: true`) o a `FAILED` si el comando falló. La
+transición `DISPATCHED → terminal` se aplica una sola vez (idempotente).
+
 ## Pendiente (próximos tramos)
 
-- Doble aprobación por outbox (estado intermedio "despachado").
 - Ingesta de eventos crudos de la placa (más allá del ack de comandos) por el
   inbox, y sincronización desired/observed.
 - Confirmación del wire protocol real (Fase 2).

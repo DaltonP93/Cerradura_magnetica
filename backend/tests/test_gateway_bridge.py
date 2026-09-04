@@ -7,6 +7,8 @@ from app.models import (
     Controller,
     ControllerStatus,
     Door,
+    DoorOpenRequest,
+    DoorOpenRequestStatus,
     Event,
     EventType,
     GatewayBridge,
@@ -239,3 +241,100 @@ def test_bridge_cannot_touch_other_org_commands(client, org_a_setup):
         headers={HEADER: "aabbccdd"},
     )
     assert resp.status_code == 404
+
+
+def test_dual_approval_via_bridge(client, admin_headers, operator_headers, seeded, controller_with_doors):
+    """In bridge mode, approval reserves the request as DISPATCHED and queues the
+    open; the bridge's ack finalizes it to EXECUTED and records the event."""
+    settings = get_settings()
+    original = settings.command_dispatch
+    settings.command_dispatch = "bridge"
+    try:
+        door = controller_with_doors["doors"][0]
+        client.patch(f"/api/v1/doors/{door['id']}", json={"requires_dual_approval": True}, headers=admin_headers)
+        req = client.post(
+            f"/api/v1/doors/{door['id']}/open-requests", json={}, headers=operator_headers
+        ).json()
+        approved = client.post(
+            f"/api/v1/doors/open-requests/{req['id']}/approve", headers=admin_headers
+        ).json()
+        assert approved["status"] == "dispatched"  # not yet opened
+
+        # No physical-open event recorded at approval time.
+        db = SessionLocal()
+        try:
+            assert db.query(Event).filter_by(type=EventType.REMOTE_OPEN).count() == 0
+            bridge = GatewayBridge(
+                organization_id=seeded["org_a"], name="B", cert_fingerprint="aabbccdd", is_active=True
+            )
+            db.add(bridge)
+            db.commit()
+        finally:
+            db.close()
+
+        client.cookies.clear()  # drop admin cookies so bridge calls are not cookie-auth
+        claimed = client.post(
+            "/api/v1/gateway/commands/claim", json={"worker_token": "w1"}, headers={HEADER: "aabbccdd"}
+        ).json()
+        assert len(claimed) == 1
+        cmd_id = claimed[0]["id"]
+
+        client.post(
+            f"/api/v1/gateway/commands/{cmd_id}/ack",
+            json={"worker_token": "w1", "success": True}, headers={HEADER: "aabbccdd"},
+        )
+
+        db = SessionLocal()
+        try:
+            assert db.get(DoorOpenRequest, req["id"]).status == DoorOpenRequestStatus.EXECUTED
+            events = db.query(Event).filter_by(type=EventType.REMOTE_OPEN, door_id=door["id"]).all()
+            assert len(events) == 1
+            assert events[0].details.get("dual_approval") is True
+        finally:
+            db.close()
+    finally:
+        settings.command_dispatch = original
+
+
+def test_dual_approval_via_bridge_failure_marks_failed(
+    client, admin_headers, operator_headers, seeded, controller_with_doors
+):
+    settings = get_settings()
+    original = settings.command_dispatch
+    settings.command_dispatch = "bridge"
+    try:
+        door = controller_with_doors["doors"][1]
+        client.patch(f"/api/v1/doors/{door['id']}", json={"requires_dual_approval": True}, headers=admin_headers)
+        req = client.post(
+            f"/api/v1/doors/{door['id']}/open-requests", json={}, headers=operator_headers
+        ).json()
+        client.post(f"/api/v1/doors/open-requests/{req['id']}/approve", headers=admin_headers)
+
+        db = SessionLocal()
+        try:
+            db.add(GatewayBridge(organization_id=seeded["org_a"], name="B",
+                                 cert_fingerprint="aabbccdd", is_active=True))
+            db.commit()
+        finally:
+            db.close()
+        client.cookies.clear()
+        cmd_id = client.post(
+            "/api/v1/gateway/commands/claim", json={"worker_token": "w1"}, headers={HEADER: "aabbccdd"}
+        ).json()[0]["id"]
+        # Exhaust retries so the command reaches FAILED (default max_attempts 5).
+        for _ in range(6):
+            client.post(
+                f"/api/v1/gateway/commands/{cmd_id}/ack",
+                json={"worker_token": "w1", "success": False, "error": "board offline"},
+                headers={HEADER: "aabbccdd"},
+            )
+            client.post(
+                "/api/v1/gateway/commands/claim", json={"worker_token": "w1"}, headers={HEADER: "aabbccdd"}
+            )
+        db = SessionLocal()
+        try:
+            assert db.get(DoorOpenRequest, req["id"]).status == DoorOpenRequestStatus.FAILED
+        finally:
+            db.close()
+    finally:
+        settings.command_dispatch = original
