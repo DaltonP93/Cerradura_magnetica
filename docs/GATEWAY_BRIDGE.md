@@ -91,10 +91,25 @@ Consumo (autenticado por la huella mTLS del puente, sin sesión de usuario):
   error?}` → acusa el resultado (idempotente). Un comando de otra organización
   responde 404 (aislamiento multi-tenant).
 
+## Cableado por flag (implementado)
+
+`ACP_COMMAND_DISPATCH` elige cómo llegan los comandos al hardware:
+
+- `direct` (default) — el endpoint llama al `ControllerGateway` de forma síncrona
+  (simulado en dev; driver `tcp` experimental si `ACP_GATEWAY_MODE=tcp`).
+- `bridge` — el endpoint **encola** un `GatewayCommand` en el outbox y responde
+  "encolado", sin tocar hardware. El puente lo ejecuta y acusa.
+
+Cubre `open_door` (puerta no crítica), `ping`, `sync_time` y `sync_permissions`.
+En modo `bridge` el evento físico (p. ej. `REMOTE_OPEN`) y el estado del
+controlador se registran cuando la placa reporta, no al encolar. La **doble
+aprobación** sigue ejecutándose de forma directa por ahora (su estado
+`EXECUTED` implica apertura efectiva; el camino asíncrono requiere semántica de
+estado adicional).
+
 ## Pendiente (próximos tramos)
 
-- **Cableado del outbox** al flujo de comandos (hoy los comandos se ejecutan de
-  forma síncrona contra el `ControllerGateway`; en despliegues con puente pasarían
-  por el outbox). Se hará detrás de un flag, sin cambiar el modo `simulated` por
-  defecto.
+- Procesar los **acks/eventos** del puente para actualizar estado del controlador
+  y registrar el evento físico en modo `bridge`.
+- Doble aprobación por outbox (estado intermedio "despachado").
 - Sincronización desired/observed y confirmación del wire protocol real (Fase 2).

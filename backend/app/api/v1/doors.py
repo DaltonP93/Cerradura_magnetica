@@ -9,6 +9,7 @@ from app.models import (
     DoorOpenRequest,
     DoorOpenRequestStatus,
     EventType,
+    GatewayCommandType,
     User,
     UserRole,
 )
@@ -20,7 +21,7 @@ from app.schemas.infrastructure import (
     DoorOut,
     DoorUpdate,
 )
-from app.services import dual_approval
+from app.services import command_dispatch, dual_approval
 from app.services.audit import record_audit
 from app.services.events import record_event
 from app.services.gateway import call_gateway, get_gateway
@@ -187,6 +188,20 @@ def open_door(
         )
     controller = get_or_404(db, Controller, door.controller_id, org_id)
     door_id_val, door_name, controller_id = door.id, door.name, controller.id
+
+    if command_dispatch.bridge_mode():
+        # Queue the pulse for the local bridge; the physical open (and its
+        # REMOTE_OPEN event) is recorded when the board reports back.
+        command = command_dispatch.enqueue_command(
+            db, organization_id=org_id, controller_id=controller_id,
+            type=GatewayCommandType.OPEN_DOOR, payload={"door": door.number, "requested_by_id": actor_id},
+        )
+        record_audit(db, user=actor, action="command:open_door", resource_type="door",
+                     resource_id=door_id_val, request=request, organization_id=org_id,
+                     details={"queued": True, "command_id": command.id})
+        db.commit()
+        return CommandResult(success=True, message="Command queued for the local bridge")
+
     # Release the connection before the network round-trip; detached objects
     # keep their loaded columns for the gateway call.
     db.expunge(door)

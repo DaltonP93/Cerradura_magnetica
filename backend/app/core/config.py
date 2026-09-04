@@ -70,6 +70,13 @@ class Settings(BaseSettings):
     # set/overwrite it and strip any client-supplied value (see docs/GATEWAY_BRIDGE.md).
     bridge_cert_header: str = "X-Client-Cert-Fingerprint"
 
+    # How controller/door commands reach the hardware:
+    #   "direct" (default) — call the ControllerGateway synchronously (simulated
+    #                        in dev; the experimental tcp driver otherwise).
+    #   "bridge"           — enqueue the command in the outbox for a local bridge
+    #                        daemon to execute and acknowledge (see GATEWAY_BRIDGE.md).
+    command_dispatch: str = "direct"
+
     # Initial super admin (created by the seed command if no users exist)
     first_superuser_email: str = "admin@example.com"
     first_superuser_password: str = DEFAULT_SUPERUSER_PASSWORD
