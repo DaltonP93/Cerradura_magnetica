@@ -194,7 +194,8 @@ def open_door(
         # REMOTE_OPEN event) is recorded when the board reports back.
         command = command_dispatch.enqueue_command(
             db, organization_id=org_id, controller_id=controller_id,
-            type=GatewayCommandType.OPEN_DOOR, payload={"door": door.number, "requested_by_id": actor_id},
+            type=GatewayCommandType.OPEN_DOOR,
+            payload={"door": door.number, "door_id": door_id_val, "requested_by_id": actor_id},
         )
         record_audit(db, user=actor, action="command:open_door", resource_type="door",
                      resource_id=door_id_val, request=request, organization_id=org_id,

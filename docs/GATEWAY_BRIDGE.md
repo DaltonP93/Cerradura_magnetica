@@ -107,9 +107,23 @@ aprobación** sigue ejecutándose de forma directa por ahora (su estado
 `EXECUTED` implica apertura efectiva; el camino asíncrono requiere semántica de
 estado adicional).
 
+## Efecto del ack en la plataforma (implementado)
+
+Cuando el puente **acusa** un comando y este pasa a estado terminal, la
+plataforma aplica el efecto correspondiente **una sola vez** (en la transición):
+
+- `OPEN_DOOR` con éxito → registra el evento `REMOTE_OPEN` (con `door_id` del
+  payload y `dispatch: bridge`).
+- `PING` → marca el controlador `ONLINE`/`OFFLINE` y registra
+  `CONTROLLER_ONLINE`/`CONTROLLER_OFFLINE` si cambió.
+- `SYNC_TIME` / `SYNC_PERMISSIONS` → sin efecto extra (ya auditados al encolar;
+  su fin queda en la fila del comando).
+
+Un re-ack no duplica el efecto (idempotente).
+
 ## Pendiente (próximos tramos)
 
-- Procesar los **acks/eventos** del puente para actualizar estado del controlador
-  y registrar el evento físico en modo `bridge`.
 - Doble aprobación por outbox (estado intermedio "despachado").
-- Sincronización desired/observed y confirmación del wire protocol real (Fase 2).
+- Ingesta de eventos crudos de la placa (más allá del ack de comandos) por el
+  inbox, y sincronización desired/observed.
+- Confirmación del wire protocol real (Fase 2).

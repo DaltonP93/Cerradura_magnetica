@@ -14,7 +14,7 @@ from sqlalchemy import select
 from app.api.helpers import get_or_404, paginate
 from app.core.config import get_settings
 from app.core.deps import DbSession, OrgId, require_roles
-from app.models import GatewayBridge, GatewayCommand, User, UserRole
+from app.models import GatewayBridge, GatewayCommand, GatewayCommandStatus, User, UserRole
 from app.schemas.common import Page
 from app.schemas.gateway import (
     AckRequest,
@@ -23,7 +23,7 @@ from app.schemas.gateway import (
     GatewayBridgeOut,
     GatewayCommandOut,
 )
-from app.services import gateway_outbox
+from app.services import gateway_effects, gateway_outbox
 from app.services.audit import record_audit
 
 router = APIRouter(prefix="/gateway", tags=["gateway-bridge"])
@@ -110,6 +110,7 @@ def claim_commands(body: ClaimRequest, db: DbSession, bridge: CurrentBridge):
 @router.post("/commands/{command_id}/ack", response_model=GatewayCommandOut)
 def acknowledge_command(command_id: int, body: AckRequest, db: DbSession, bridge: CurrentBridge):
     command = get_or_404(db, GatewayCommand, command_id, bridge.organization_id)
+    was_terminal = command.status in (GatewayCommandStatus.SUCCEEDED, GatewayCommandStatus.FAILED)
     try:
         gateway_outbox.acknowledge(
             db, command=command, worker_token=body.worker_token,
@@ -117,6 +118,12 @@ def acknowledge_command(command_id: int, body: AckRequest, db: DbSession, bridge
         )
     except gateway_outbox.OutboxError as exc:
         raise HTTPException(exc.status_code, exc.message) from exc
+    # Apply the platform-side effect exactly once, on the terminal transition.
+    now_terminal = command.status in (GatewayCommandStatus.SUCCEEDED, GatewayCommandStatus.FAILED)
+    if not was_terminal and now_terminal:
+        gateway_effects.apply_outcome(
+            db, command=command, success=command.status == GatewayCommandStatus.SUCCEEDED
+        )
     bridge.last_seen_at = datetime.now(UTC)
     db.commit()
     db.refresh(command)

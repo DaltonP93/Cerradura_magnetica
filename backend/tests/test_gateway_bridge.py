@@ -3,7 +3,15 @@ import pytest
 
 from app.core.config import get_settings
 from app.core.database import SessionLocal
-from app.models import Controller, GatewayBridge, GatewayCommandType
+from app.models import (
+    Controller,
+    ControllerStatus,
+    Door,
+    Event,
+    EventType,
+    GatewayBridge,
+    GatewayCommandType,
+)
 from app.services import gateway_outbox
 
 HEADER = get_settings().bridge_cert_header
@@ -128,6 +136,80 @@ def test_ack_wrong_worker_conflicts(client, org_a_setup):
         headers={HEADER: "aabbccdd"},
     )
     assert resp.status_code == 409
+
+
+def _enqueue_typed(org_id, controller_id, type_, payload, key):
+    db = SessionLocal()
+    try:
+        cmd = gateway_outbox.enqueue(
+            db, organization_id=org_id, controller_id=controller_id,
+            type=type_, idempotency_key=key, payload=payload,
+        )
+        db.commit()
+        return cmd.id
+    finally:
+        db.close()
+
+
+def test_ack_open_door_records_remote_open_event(client, org_a_setup):
+    # A door on the controller (REMOTE_OPEN.door_id references it).
+    db = SessionLocal()
+    try:
+        door = Door(organization_id=org_a_setup["org_a"], controller_id=org_a_setup["controller_id"],
+                    number=1, name="Front")
+        db.add(door)
+        db.commit()
+        door_id = door.id
+    finally:
+        db.close()
+
+    command_id = _enqueue_typed(
+        org_a_setup["org_a"], org_a_setup["controller_id"], GatewayCommandType.OPEN_DOOR,
+        {"door": 1, "door_id": door_id, "requested_by_id": 1}, "open-1",
+    )
+    client.post("/api/v1/gateway/commands/claim", json={"worker_token": "w1"}, headers={HEADER: "aabbccdd"})
+    client.post(
+        f"/api/v1/gateway/commands/{command_id}/ack",
+        json={"worker_token": "w1", "success": True}, headers={HEADER: "aabbccdd"},
+    )
+
+    db = SessionLocal()
+    try:
+        events = db.query(Event).filter_by(type=EventType.REMOTE_OPEN, door_id=door_id).all()
+        assert len(events) == 1
+        assert events[0].details["dispatch"] == "bridge"
+    finally:
+        db.close()
+
+    # Re-ack must not double-record (idempotent effect).
+    client.post(
+        f"/api/v1/gateway/commands/{command_id}/ack",
+        json={"worker_token": "w1", "success": True}, headers={HEADER: "aabbccdd"},
+    )
+    db = SessionLocal()
+    try:
+        assert db.query(Event).filter_by(type=EventType.REMOTE_OPEN, door_id=door_id).count() == 1
+    finally:
+        db.close()
+
+
+def test_ack_ping_updates_controller_status(client, org_a_setup):
+    command_id = _enqueue_typed(
+        org_a_setup["org_a"], org_a_setup["controller_id"], GatewayCommandType.PING, None, "ping-1",
+    )
+    client.post("/api/v1/gateway/commands/claim", json={"worker_token": "w1"}, headers={HEADER: "aabbccdd"})
+    client.post(
+        f"/api/v1/gateway/commands/{command_id}/ack",
+        json={"worker_token": "w1", "success": True}, headers={HEADER: "aabbccdd"},
+    )
+    db = SessionLocal()
+    try:
+        ctrl = db.get(Controller, org_a_setup["controller_id"])
+        assert ctrl.status == ControllerStatus.ONLINE
+        assert ctrl.last_seen_at is not None
+        assert db.query(Event).filter_by(type=EventType.CONTROLLER_ONLINE).count() == 1
+    finally:
+        db.close()
 
 
 def test_bridge_cannot_touch_other_org_commands(client, org_a_setup):
