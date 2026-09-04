@@ -54,6 +54,24 @@ class DoorOpenRequestStatus(str, enum.Enum):
     FAILED = "failed"          # approved, but the gateway command failed
 
 
+class GatewayCommandType(str, enum.Enum):
+    """A command the platform wants a controller to execute, via the bridge."""
+
+    PING = "ping"
+    OPEN_DOOR = "open_door"
+    SYNC_TIME = "sync_time"
+    SYNC_PERMISSIONS = "sync_permissions"
+
+
+class GatewayCommandStatus(str, enum.Enum):
+    """Lifecycle of an outbox command consumed by the local gateway bridge."""
+
+    PENDING = "pending"      # queued, awaiting a bridge worker
+    LEASED = "leased"        # claimed by a worker (lease has an expiry)
+    SUCCEEDED = "succeeded"  # bridge reported success
+    FAILED = "failed"        # exhausted retries or a permanent error
+
+
 class CredentialType(str, enum.Enum):
     CARD = "card"
     PIN = "pin"

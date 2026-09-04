@@ -15,9 +15,12 @@ from app.models.base import (
     DoorMode,
     DoorOpenRequestStatus,
     EventType,
+    GatewayCommandStatus,
+    GatewayCommandType,
     UserRole,
 )
 from app.models.events import AuditLog, Event
+from app.models.gateway import GatewayCommand
 from app.models.infrastructure import Controller, Door, DoorOpenRequest, Site
 from app.models.people import Cardholder, Credential, Department
 from app.models.tenancy import Organization, User
@@ -41,6 +44,9 @@ __all__ = [
     "DoorOpenRequestStatus",
     "Event",
     "EventType",
+    "GatewayCommand",
+    "GatewayCommandStatus",
+    "GatewayCommandType",
     "Holiday",
     "Leave",
     "LeaveType",
