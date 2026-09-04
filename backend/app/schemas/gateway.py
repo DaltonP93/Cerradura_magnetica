@@ -50,3 +50,26 @@ class AckRequest(BaseModel):
     success: bool
     result: dict | None = None
     error: str | None = Field(default=None, max_length=500)
+
+
+# --- Inbox: events reported by the board via the bridge ---
+class GatewayEventIn(BaseModel):
+    event_uid: str = Field(min_length=1, max_length=120)  # idempotency key
+    type: str = Field(min_length=1, max_length=50)        # board event type (EventType value)
+    occurred_at: datetime | None = None
+    controller_id: int | None = None
+    controller_serial: str | None = Field(default=None, max_length=100)
+    door_number: int | None = Field(default=None, ge=1, le=4)
+    card_number: str | None = Field(default=None, max_length=50)
+    message: str | None = Field(default=None, max_length=500)
+    details: dict | None = None
+
+
+class GatewayEventBatch(BaseModel):
+    events: list[GatewayEventIn] = Field(min_length=1, max_length=500)
+
+
+class GatewayEventsResult(BaseModel):
+    accepted: int
+    duplicates: int
+    errors: list[dict]

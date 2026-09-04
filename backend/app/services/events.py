@@ -175,11 +175,15 @@ def record_event(
     cardholder_id: int | None = None,
     credential_id: int | None = None,
     details: dict | None = None,
+    external_id: str | None = None,
+    occurred_at: datetime | None = None,
 ) -> Event:
     """Persist an event and queue its broadcast to live monitors.
 
     The broadcast is deferred until the surrounding transaction commits, so a
     later rollback never emits a phantom event that isn't actually stored.
+    ``occurred_at`` overrides the default timestamp (used by the bridge inbox to
+    record when the board actually observed the event).
     """
     event = Event(
         organization_id=organization_id,
@@ -190,7 +194,10 @@ def record_event(
         cardholder_id=cardholder_id,
         credential_id=credential_id,
         details=details,
+        external_id=external_id,
     )
+    if occurred_at is not None:
+        event.occurred_at = occurred_at
     db.add(event)
     db.flush()
     # Capture the payload now (the id is assigned at flush); fan out post-commit.

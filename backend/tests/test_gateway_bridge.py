@@ -338,3 +338,55 @@ def test_dual_approval_via_bridge_failure_marks_failed(
             db.close()
     finally:
         settings.command_dispatch = original
+
+
+# --- Inbox: board events ---
+def test_inbox_ingests_masks_and_deduplicates(client, org_a_setup):
+    ev = {
+        "event_uid": "ev-1", "type": "access_denied",
+        "controller_id": org_a_setup["controller_id"],
+        "card_number": "12345678", "message": "denied at door",
+    }
+    resp = client.post("/api/v1/gateway/events", json={"events": [ev]}, headers={HEADER: "aabbccdd"})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["accepted"] == 1 and body["duplicates"] == 0 and body["errors"] == []
+
+    db = SessionLocal()
+    try:
+        e = db.query(Event).filter_by(external_id="ev-1").one()
+        assert e.type == EventType.ACCESS_DENIED
+        assert e.details["card"] == "****5678"          # masked
+        assert "12345678" not in str(e.details)          # raw card never stored
+        assert e.details["source"] == "board"
+    finally:
+        db.close()
+
+    # Re-sending the same event_uid is a no-op (idempotent).
+    again = client.post("/api/v1/gateway/events", json={"events": [ev]}, headers={HEADER: "aabbccdd"}).json()
+    assert again["duplicates"] == 1 and again["accepted"] == 0
+    db = SessionLocal()
+    try:
+        assert db.query(Event).filter_by(external_id="ev-1").count() == 1
+    finally:
+        db.close()
+
+
+def test_inbox_reports_unknown_controller_and_type(client, org_a_setup):
+    events = [
+        {"event_uid": "a", "type": "alarm", "controller_id": 999999},          # unknown controller
+        {"event_uid": "b", "type": "not_a_type", "controller_id": org_a_setup["controller_id"]},
+    ]
+    body = client.post("/api/v1/gateway/events", json={"events": events}, headers={HEADER: "aabbccdd"}).json()
+    assert body["accepted"] == 0
+    reasons = [e["reason"] for e in body["errors"]]
+    assert any("unknown controller" in r for r in reasons)
+    assert any("unknown event type" in r for r in reasons)
+
+
+def test_inbox_requires_bridge_auth(client, org_a_setup):
+    resp = client.post(
+        "/api/v1/gateway/events",
+        json={"events": [{"event_uid": "x", "type": "alarm", "controller_id": org_a_setup["controller_id"]}]},
+    )
+    assert resp.status_code == 401

@@ -22,8 +22,10 @@ from app.schemas.gateway import (
     GatewayBridgeCreate,
     GatewayBridgeOut,
     GatewayCommandOut,
+    GatewayEventBatch,
+    GatewayEventsResult,
 )
-from app.services import gateway_effects, gateway_outbox
+from app.services import gateway_effects, gateway_inbox, gateway_outbox
 from app.services.audit import record_audit
 
 router = APIRouter(prefix="/gateway", tags=["gateway-bridge"])
@@ -128,3 +130,17 @@ def acknowledge_command(command_id: int, body: AckRequest, db: DbSession, bridge
     db.commit()
     db.refresh(command)
     return command
+
+
+@router.post("/events", response_model=GatewayEventsResult)
+def ingest_board_events(body: GatewayEventBatch, db: DbSession, bridge: CurrentBridge):
+    """Inbox: record events the board reported, scoped to the bridge's org.
+
+    Idempotent per ``event_uid``; card numbers are masked before storage.
+    """
+    result = gateway_inbox.ingest_events(
+        db, organization_id=bridge.organization_id, events=body.events
+    )
+    bridge.last_seen_at = datetime.now(UTC)
+    db.commit()
+    return GatewayEventsResult(**result)

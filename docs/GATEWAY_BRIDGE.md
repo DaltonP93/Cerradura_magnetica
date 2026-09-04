@@ -131,8 +131,27 @@ comando, el efecto finaliza la solicitud a `EXECUTED` (registrando el evento
 `REMOTE_OPEN` con `dual_approval: true`) o a `FAILED` si el comando falló. La
 transición `DISPATCHED → terminal` se aplica una sola vez (idempotente).
 
+## Inbox de eventos de placa (implementado, Fase 5)
+
+El puente reporta los eventos que la placa decide/observa por su cuenta
+(accesos resueltos offline, sensores de puerta, forzado/mantenida abierta,
+alarmas, online/offline) vía `POST /api/v1/gateway/events` (autenticado por la
+huella mTLS del puente):
+
+- Cuerpo: `{ events: [ { event_uid, type, occurred_at?, controller_id? |
+  controller_serial?, door_number?, card_number?, message?, details? } ] }`
+  (lote de hasta 500).
+- **Idempotente** por `event_uid` (columna `events.external_id`, único por
+  organización) — un reenvío no se registra dos veces.
+- Resuelve controladora (por id o serie), puerta (controladora+número) y persona
+  (por nº de tarjeta) dentro de la organización del puente; `type` se mapea a
+  `EventType` (tipo desconocido → error de esa fila). El nº de tarjeta se
+  **enmascara** antes de guardar (invariante #6). Devuelve `{accepted,
+  duplicates, errors}`.
+- Cada evento aceptado se registra y se **difunde en vivo** como cualquier otro
+  (tras el commit).
+
 ## Pendiente (próximos tramos)
 
-- Ingesta de eventos crudos de la placa (más allá del ack de comandos) por el
-  inbox, y sincronización desired/observed.
+- Sincronización desired/observed (estado deseado vs. observado por placa).
 - Confirmación del wire protocol real (Fase 2).
