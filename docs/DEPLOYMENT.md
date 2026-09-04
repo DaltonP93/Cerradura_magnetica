@@ -64,6 +64,15 @@ guardarlos en almacenamiento separado y con acceso restringido.
 Verificar periódicamente una **restauración** en un entorno aislado; un backup
 no probado no es un backup.
 
+## Observabilidad
+
+- Cada request recibe un **id de correlación**: el borde puede mandarlo en
+  `X-Request-ID` (se respeta) o el backend lo genera; siempre se devuelve en la
+  respuesta y aparece en el log de acceso, para trazar una petición punta a punta.
+- `ACP_JSON_LOGS=true` emite los logs como **JSON** (nivel, logger, mensaje,
+  request_id, y para el acceso: method/path/status/duration_ms) para ingestión en
+  un pipeline de logs; en desarrollo queda en texto plano.
+
 ## Multi-worker (caveat)
 
 El rate limiter de auth es en memoria y la señal inmediata de revocación de

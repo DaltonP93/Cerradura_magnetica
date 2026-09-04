@@ -77,6 +77,9 @@ class Settings(BaseSettings):
     #                        daemon to execute and acknowledge (see GATEWAY_BRIDGE.md).
     command_dispatch: str = "direct"
 
+    # Emit logs as structured JSON (for a log pipeline) instead of plain text.
+    json_logs: bool = False
+
     # Initial super admin (created by the seed command if no users exist)
     first_superuser_email: str = "admin@example.com"
     first_superuser_password: str = DEFAULT_SUPERUSER_PASSWORD

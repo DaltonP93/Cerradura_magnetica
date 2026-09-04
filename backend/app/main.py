@@ -11,10 +11,12 @@ from app.api.router import api_router, ws_router
 from app.core.config import get_settings
 from app.core.csrf import CSRFMiddleware
 from app.core.database import Base, engine, get_db
+from app.core.observability import RequestContextMiddleware, configure_logging
 from app.services.events import set_main_loop
 
 logging.basicConfig(level=logging.INFO)
 settings = get_settings()
+configure_logging(settings.json_logs)
 
 
 @asynccontextmanager
@@ -48,6 +50,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Added last so it is the outermost middleware: every request gets a correlation
+# id and one structured access-log line, wrapping CORS/CSRF and the handlers.
+app.add_middleware(RequestContextMiddleware)
 
 app.include_router(api_router)
 app.include_router(ws_router)
