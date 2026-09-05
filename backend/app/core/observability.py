@@ -16,6 +16,8 @@ from contextvars import ContextVar
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
+from app.core import metrics
+
 REQUEST_ID_HEADER = "X-Request-ID"
 _request_id: ContextVar[str] = ContextVar("request_id", default="-")
 
@@ -63,15 +65,17 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
             response = await call_next(request)
             return response
         finally:
-            duration_ms = round((time.perf_counter() - start) * 1000, 1)
+            elapsed = time.perf_counter() - start
+            status = response.status_code if response is not None else 500
+            metrics.observe_request(request.method, status, elapsed)
             access_logger.info(
                 "request",
                 extra={
                     "request_id": request_id,
                     "method": request.method,
                     "path": request.url.path,
-                    "status": response.status_code if response is not None else 500,
-                    "duration_ms": duration_ms,
+                    "status": status,
+                    "duration_ms": round(elapsed * 1000, 1),
                 },
             )
             if response is not None:

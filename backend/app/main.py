@@ -2,12 +2,14 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.api.router import api_router, ws_router
+from app.core import metrics
 from app.core.config import get_settings
 from app.core.csrf import CSRFMiddleware
 from app.core.database import Base, engine, get_db
@@ -72,3 +74,15 @@ def readiness(db: Session = Depends(get_db)):
     except Exception as exc:  # noqa: BLE001 - report any DB failure as not-ready
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "database unavailable") from exc
     return {"status": "ready"}
+
+
+@app.get("/metrics", tags=["health"])
+def prometheus_metrics(request: Request):
+    """Prometheus metrics. Gated by ACP_METRICS_TOKEN when configured."""
+    token = settings.metrics_token
+    if token:
+        header = request.headers.get("authorization", "")
+        presented = header[7:] if header.lower().startswith("bearer ") else request.headers.get("x-metrics-token")
+        if presented != token:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid metrics token")
+    return PlainTextResponse(metrics.render(), media_type="text/plain; version=0.0.4")

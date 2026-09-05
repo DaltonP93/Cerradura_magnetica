@@ -72,6 +72,13 @@ no probado no es un backup.
 - `ACP_JSON_LOGS=true` emite los logs como **JSON** (nivel, logger, mensaje,
   request_id, y para el acceso: method/path/status/duration_ms) para ingestión en
   un pipeline de logs; en desarrollo queda en texto plano.
+- El request_id también se **persiste en la auditoría** (`audit_logs.request_id`),
+  para correlacionar una acción auditada con su línea de acceso.
+- **Métricas Prometheus** en `GET /metrics` (contadores de requests por
+  método/estado y suma/conteo de latencia). Protegido por `ACP_METRICS_TOKEN`
+  (Bearer o `X-Metrics-Token`) cuando está seteado; si no, restringirlo en el
+  borde. En multi-worker cada worker lleva sus propios contadores (mismo caveat
+  que el rate limiter en memoria).
 
 ## Multi-worker (caveat)
 

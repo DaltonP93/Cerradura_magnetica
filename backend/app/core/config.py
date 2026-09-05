@@ -80,6 +80,11 @@ class Settings(BaseSettings):
     # Emit logs as structured JSON (for a log pipeline) instead of plain text.
     json_logs: bool = False
 
+    # Prometheus metrics at /metrics. If set, callers must present this token
+    # (Authorization: Bearer <token> or X-Metrics-Token). If unset, the endpoint
+    # is open — restrict it at the edge in production.
+    metrics_token: str | None = None
+
     # Initial super admin (created by the seed command if no users exist)
     first_superuser_email: str = "admin@example.com"
     first_superuser_password: str = DEFAULT_SUPERUSER_PASSWORD

@@ -52,6 +52,9 @@ class AuditLog(Base):
     resource_id: Mapped[str | None] = mapped_column(String(50))
     details: Mapped[dict | None] = mapped_column(JSON)
     ip_address: Mapped[str | None] = mapped_column(String(45))
+    # Correlation id of the request that produced this entry (ties an audit row
+    # to its access-log line and to anything else logged for that request).
+    request_id: Mapped[str | None] = mapped_column(String(64), index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, index=True, nullable=False
     )
