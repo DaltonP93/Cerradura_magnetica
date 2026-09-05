@@ -49,6 +49,31 @@ Las controladoras deciden de forma autónoma con las tarjetas cargadas en su mem
 2. Sincronizar permisos hacia la placa (equivalente a "Allow and Upload").
 3. La placa reporta los eventos; el puente los reenvía a la API para monitoreo e historial (equivalente a "Download And Monitor").
 
+## Lectoras y formatos Wiegand / PIN (datasheets de lectora)
+
+> Fuente: datasheets de las lectoras RFID y con teclado provistas por el dueño.
+> Describen la interfaz **lectora → controladora** (Wiegand), no el protocolo de
+> red plataforma↔controladora (ese sigue pendiente; ver "Codec del protocolo").
+
+- **Tipos de tarjeta**: EM (125 KHz) y/o Mifare (13.56 MHz); Mifare incluye
+  PLUS, DESFire, Pro, Ultralight, Classic, NFC213-216, S50, S70. IP67, 10-24 V DC.
+- **Formato Wiegand**: default de fábrica **34 bits**; configurable por el usuario.
+  EM: 26–44 bits. Mifare: 26–44, 47, 56, 58, **64**, 66 bits. (El soporte de
+  **tarjeta de 64 bits** de Fase 2 corresponde a este formato Wiegand de 64 bits.)
+- **PIN por teclado** (lectora con keypad), tres modos de salida Wiegand:
+  - **4-bit por tecla**: cada dígito envía su nibble (1=0001 … 9=1001, 0=0000,
+    *=1010, #=1011).
+  - **8-bit por tecla**: cada dígito envía un byte (mapa dedicado por tecla).
+  - **Virtual card number (10 dígitos)**: un PIN de 4-6 dígitos se emite como un
+    número de tarjeta decimal de 10 dígitos (p. ej. `999999` → `0000999999`).
+    Implicancia para la plataforma: un PIN de teclado puede presentarse como un
+    "número de tarjeta" — a tener en cuenta al mapear credenciales PIN vs tarjeta.
+- **Configuración**: en lectoras con teclado, los formatos Wiegand se setean por
+  el teclado (modo programa `* <código> #`); las lectoras sin teclado requieren
+  una lectora con teclado externa para configurarse.
+- **Cableado de lectora** (colores): Red DC+, Black GND, Green D0, White D1,
+  Brown LED (verde), Yellow BZ (buzzer), Grey BELL1, Blue BELL2.
+
 ## Cableado (resumen del manual original)
 
 - Cerradura magnética al relé NO/COM de cada puerta con fuente de 12 V dedicada.
