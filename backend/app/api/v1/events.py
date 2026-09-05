@@ -5,6 +5,7 @@ from sqlalchemy import select
 
 from app.api.helpers import get_or_404, paginate
 from app.core.deps import DbSession, OrgId, require_roles
+from app.core.masking import mask_card
 from app.models import Door, Event, EventType, User, UserRole
 from app.schemas.common import Page
 from app.schemas.events import EventOut, SwipeRequest, SwipeResult
@@ -64,7 +65,7 @@ def swipe(body: SwipeRequest, db: DbSession, org_id: OrgId, request: Request, ac
     )
     record_audit(db, user=actor, action="swipe_test", resource_type="door",
                  resource_id=door.id, request=request, organization_id=org_id,
-                 details={"granted": decision.granted, "card": body.card_number})
+                 details={"granted": decision.granted, "card": mask_card(body.card_number)})
     db.commit()
     return SwipeResult(
         granted=decision.granted,

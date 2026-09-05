@@ -7,6 +7,8 @@ from app.models import Organization, User
 from app.schemas.common import Message, Page
 from app.schemas.tenancy import OrganizationCreate, OrganizationOut, OrganizationUpdate
 from app.services.audit import record_audit
+from app.services.events import manager
+from app.services.sessions import revoke_org_sessions
 
 router = APIRouter(prefix="/organizations", tags=["organizations"])
 
@@ -61,13 +63,25 @@ def update_organization(
     user: User = SuperAdmin,
 ):
     org = get_or_404(db, Organization, org_id)
-    for field, value in body.model_dump(exclude_unset=True).items():
+    data = body.model_dump(exclude_unset=True)
+    for field, value in data.items():
         setattr(org, field, value)
+    # Suspending an organization logs out every one of its users immediately.
+    suspended = data.get("is_active") is False
+    if suspended:
+        count = revoke_org_sessions(db, org.id, "org_suspended")
+        record_audit(
+            db, user=user, action="revoke_sessions", resource_type="organization",
+            resource_id=org.id, request=request, organization_id=org.id,
+            details={"revoked_sessions": count, "reason": "org_suspended"},
+        )
     record_audit(
         db, user=user, action="update", resource_type="organization",
         resource_id=org.id, request=request, organization_id=org.id,
     )
     db.commit()
+    if suspended:
+        manager.close_org(org.id)  # tear down live monitor sockets for the whole org
     return org
 
 

@@ -2,45 +2,109 @@
 import asyncio
 import json
 import logging
+import threading
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from fastapi import WebSocket
+from sqlalchemy import event as sa_event
 from sqlalchemy.orm import Session
 
 from app.models import Event, EventType
 
 logger = logging.getLogger(__name__)
 
+# Key under which a session buffers event payloads awaiting its commit.
+_PENDING_KEY = "pending_event_broadcasts"
+
+
+@dataclass(eq=False)
+class Connection:
+    """A live monitor socket plus the identity used to revoke it."""
+
+    websocket: WebSocket
+    org_id: int
+    user_id: int
+    session_id: str
+    loop: asyncio.AbstractEventLoop
+    close_event: asyncio.Event = field(default_factory=asyncio.Event)
+
+    def signal_close(self) -> None:
+        """Ask the socket's own loop to close it (safe from any thread)."""
+        self.loop.call_soon_threadsafe(self.close_event.set)
+
 
 class ConnectionManager:
-    """Tracks WebSocket subscribers per organization and broadcasts events."""
+    """Tracks WebSocket subscribers per organization and broadcasts events.
+
+    Revocation may be triggered from synchronous request handlers running in a
+    worker thread, so the registry is guarded by a plain threading.Lock and the
+    close methods only *signal* each connection's event via
+    ``loop.call_soon_threadsafe`` — the socket is actually closed on its own
+    event loop by the WebSocket handler.
+    """
 
     def __init__(self) -> None:
-        self._connections: dict[int, set[WebSocket]] = {}
-        self._lock = asyncio.Lock()
+        self._by_org: dict[int, set[Connection]] = {}
+        self._lock = threading.Lock()
 
-    async def connect(self, org_id: int, websocket: WebSocket) -> None:
+    async def connect(self, websocket: WebSocket, *, org_id: int, user_id: int, session_id: str) -> Connection:
         await websocket.accept()
-        async with self._lock:
-            self._connections.setdefault(org_id, set()).add(websocket)
+        conn = Connection(
+            websocket=websocket,
+            org_id=org_id,
+            user_id=user_id,
+            session_id=session_id,
+            loop=asyncio.get_running_loop(),
+        )
+        with self._lock:
+            self._by_org.setdefault(org_id, set()).add(conn)
+        return conn
 
-    async def disconnect(self, org_id: int, websocket: WebSocket) -> None:
-        async with self._lock:
-            conns = self._connections.get(org_id)
+    def _remove(self, conn: Connection) -> None:
+        with self._lock:
+            conns = self._by_org.get(conn.org_id)
             if conns:
-                conns.discard(websocket)
+                conns.discard(conn)
                 if not conns:
-                    self._connections.pop(org_id, None)
+                    self._by_org.pop(conn.org_id, None)
+
+    async def disconnect(self, conn: Connection) -> None:
+        self._remove(conn)
+
+    def _snapshot(self, org_id: int | None = None) -> list[Connection]:
+        with self._lock:
+            if org_id is not None:
+                return list(self._by_org.get(org_id, ()))
+            return [c for conns in self._by_org.values() for c in conns]
+
+    # --- revocation signals (safe to call from sync worker threads) --------
+
+    def close_session(self, session_id: str) -> int:
+        matched = [c for c in self._snapshot() if c.session_id == session_id]
+        for c in matched:
+            c.signal_close()
+        return len(matched)
+
+    def close_user(self, user_id: int) -> int:
+        matched = [c for c in self._snapshot() if c.user_id == user_id]
+        for c in matched:
+            c.signal_close()
+        return len(matched)
+
+    def close_org(self, org_id: int) -> int:
+        matched = self._snapshot(org_id)
+        for c in matched:
+            c.signal_close()
+        return len(matched)
 
     async def broadcast(self, org_id: int, payload: dict) -> None:
         message = json.dumps(payload, default=str)
-        async with self._lock:
-            targets = list(self._connections.get(org_id, ()))
-        for ws in targets:
+        for conn in self._snapshot(org_id):
             try:
-                await ws.send_text(message)
+                await conn.websocket.send_text(message)
             except Exception:  # noqa: BLE001 - a dead socket must not break the loop
-                await self.disconnect(org_id, ws)
+                self._remove(conn)
 
 
 manager = ConnectionManager()
@@ -72,6 +136,34 @@ def _event_payload(event: Event) -> dict:
     }
 
 
+def _dispatch_broadcast(organization_id: int, payload: dict) -> None:
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(manager.broadcast(organization_id, payload))
+    except RuntimeError:
+        # Worker thread (sync endpoint): hand the broadcast to the main loop.
+        if _main_loop is not None and _main_loop.is_running():
+            asyncio.run_coroutine_threadsafe(manager.broadcast(organization_id, payload), _main_loop)
+        else:
+            logger.debug("No event loop available; skipping websocket broadcast")
+
+
+@sa_event.listens_for(Session, "after_commit")
+def _flush_pending_broadcasts(session: Session) -> None:
+    """Fan out buffered events only once the transaction has actually committed."""
+    pending = session.info.pop(_PENDING_KEY, None)
+    if not pending:
+        return
+    for organization_id, payload in pending:
+        _dispatch_broadcast(organization_id, payload)
+
+
+@sa_event.listens_for(Session, "after_rollback")
+def _drop_pending_broadcasts(session: Session) -> None:
+    """A rolled-back transaction never happened: discard its would-be events."""
+    session.info.pop(_PENDING_KEY, None)
+
+
 def record_event(
     db: Session,
     *,
@@ -83,8 +175,16 @@ def record_event(
     cardholder_id: int | None = None,
     credential_id: int | None = None,
     details: dict | None = None,
+    external_id: str | None = None,
+    occurred_at: datetime | None = None,
 ) -> Event:
-    """Persist an event and schedule its broadcast to live monitors."""
+    """Persist an event and queue its broadcast to live monitors.
+
+    The broadcast is deferred until the surrounding transaction commits, so a
+    later rollback never emits a phantom event that isn't actually stored.
+    ``occurred_at`` overrides the default timestamp (used by the bridge inbox to
+    record when the board actually observed the event).
+    """
     event = Event(
         organization_id=organization_id,
         type=type,
@@ -94,18 +194,12 @@ def record_event(
         cardholder_id=cardholder_id,
         credential_id=credential_id,
         details=details,
+        external_id=external_id,
     )
+    if occurred_at is not None:
+        event.occurred_at = occurred_at
     db.add(event)
     db.flush()
-
-    payload = _event_payload(event)
-    try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(manager.broadcast(organization_id, payload))
-    except RuntimeError:
-        # Worker thread (sync endpoint): hand the broadcast to the main loop.
-        if _main_loop is not None and _main_loop.is_running():
-            asyncio.run_coroutine_threadsafe(manager.broadcast(organization_id, payload), _main_loop)
-        else:
-            logger.debug("No event loop available; skipping websocket broadcast")
+    # Capture the payload now (the id is assigned at flush); fan out post-commit.
+    db.info.setdefault(_PENDING_KEY, []).append((organization_id, _event_payload(event)))
     return event

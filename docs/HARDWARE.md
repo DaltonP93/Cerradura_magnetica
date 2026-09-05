@@ -21,7 +21,16 @@ El manual del sistema es una **guía operativa, no una especificación de protoc
 | `simulated` (por defecto) | `simulated.py` — responde siempre, ideal para demo, desarrollo y tests | ✅ Estable |
 | `tcp` | `l04_udp.py` — protocolo UDP binario de 64 bytes (puerto 60000) usado por controladoras de 4 puertas UHPPOTE-compatibles | ⚠️ **Experimental** |
 
-> **Importante**: el modo `tcp` implementa un protocolo público de placas de 4 puertas que usan el mismo puerto 60000, pero **no está verificado contra las placas N3000 de este proyecto**. Antes de usarlo en producción hay que confirmar el protocolo real con el SDK del fabricante o capturando tráfico del software legacy. Los códigos de función están centralizados como constantes `FUNC_*` en `l04_udp.py` para ajustarlos sin tocar el resto de la plataforma.
+> **Importante**: el modo `tcp` implementa un protocolo público de placas de 4 puertas que usan el mismo puerto 60000, pero **no está verificado contra las placas N3000 de este proyecto**. Antes de usarlo en producción hay que confirmar el protocolo real con el SDK del fabricante o capturando tráfico del software legacy.
+
+### Codec del protocolo (Fase 2)
+
+El **formato de la trama de 64 bytes** está aislado en el paquete puro `backend/app/services/protocol/` (sin I/O):
+
+- `frames.py`: modelo `Frame` y `encode_frame`/`decode_frame` con validación (largo 64, marcador `0x17`, serial LE, `xID`/secuencia en offset 40).
+- `codec.py`: builders/parsers por función (`FUNC_*`: status, open door, set time, put card, discover), helpers BCD/fecha y el registro de tarjeta (`CardRecord`).
+
+`l04_udp.py` es **solo transporte** (UDP async) y delega toda la codificación en este codec, que es la **única fuente de verdad** del formato y está cubierto por tests puros (`tests/test_protocol_codec.py`) con vectores hex sintéticos. Sigue siendo **experimental**: un test verde del codec **no** equivale a validación contra hardware. Las funciones cuyo layout real se desconoce para el N3000 (p. ej. perfiles horarios semanales por tarjeta) se dejan **sin implementar** en lugar de inventarse. Ajustar los códigos `FUNC_*` en `codec.py` cuando se confirme el protocolo real; el resto de la plataforma no cambia.
 
 ## Camino recomendado hacia el hardware real
 
@@ -39,6 +48,31 @@ Las controladoras deciden de forma autónoma con las tarjetas cargadas en su mem
 1. Gestionar personal, niveles y horarios en la plataforma.
 2. Sincronizar permisos hacia la placa (equivalente a "Allow and Upload").
 3. La placa reporta los eventos; el puente los reenvía a la API para monitoreo e historial (equivalente a "Download And Monitor").
+
+## Lectoras y formatos Wiegand / PIN (datasheets de lectora)
+
+> Fuente: datasheets de las lectoras RFID y con teclado provistas por el dueño.
+> Describen la interfaz **lectora → controladora** (Wiegand), no el protocolo de
+> red plataforma↔controladora (ese sigue pendiente; ver "Codec del protocolo").
+
+- **Tipos de tarjeta**: EM (125 KHz) y/o Mifare (13.56 MHz); Mifare incluye
+  PLUS, DESFire, Pro, Ultralight, Classic, NFC213-216, S50, S70. IP67, 10-24 V DC.
+- **Formato Wiegand**: default de fábrica **34 bits**; configurable por el usuario.
+  EM: 26–44 bits. Mifare: 26–44, 47, 56, 58, **64**, 66 bits. (El soporte de
+  **tarjeta de 64 bits** de Fase 2 corresponde a este formato Wiegand de 64 bits.)
+- **PIN por teclado** (lectora con keypad), tres modos de salida Wiegand:
+  - **4-bit por tecla**: cada dígito envía su nibble (1=0001 … 9=1001, 0=0000,
+    *=1010, #=1011).
+  - **8-bit por tecla**: cada dígito envía un byte (mapa dedicado por tecla).
+  - **Virtual card number (10 dígitos)**: un PIN de 4-6 dígitos se emite como un
+    número de tarjeta decimal de 10 dígitos (p. ej. `999999` → `0000999999`).
+    Implicancia para la plataforma: un PIN de teclado puede presentarse como un
+    "número de tarjeta" — a tener en cuenta al mapear credenciales PIN vs tarjeta.
+- **Configuración**: en lectoras con teclado, los formatos Wiegand se setean por
+  el teclado (modo programa `* <código> #`); las lectoras sin teclado requieren
+  una lectora con teclado externa para configurarse.
+- **Cableado de lectora** (colores): Red DC+, Black GND, Green D0, White D1,
+  Brown LED (verde), Yellow BZ (buzzer), Grey BELL1, Blue BELL2.
 
 ## Cableado (resumen del manual original)
 

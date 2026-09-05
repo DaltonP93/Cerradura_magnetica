@@ -1,6 +1,7 @@
 services:
   db:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_USER: acp
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-acp-dev-password}
@@ -15,25 +16,37 @@ services:
 
   backend:
     build: ./backend
+    restart: unless-stopped
     environment:
       ACP_DATABASE_URL: postgresql+psycopg2://acp:${POSTGRES_PASSWORD:-acp-dev-password}@db:5432/access_control
       ACP_SECRET_KEY: ${ACP_SECRET_KEY:?set ACP_SECRET_KEY in .env}
-      ACP_ENVIRONMENT: production
+      # Quick-start runs in development so the demo seed can populate sample
+      # data. A real deployment sets ACP_ENVIRONMENT=production (which enforces a
+      # strong secret and superuser password and disables the demo seed) and
+      # provisions real accounts instead of running `python -m app.seed`.
+      ACP_ENVIRONMENT: ${ACP_ENVIRONMENT:-development}
       ACP_GATEWAY_MODE: ${ACP_GATEWAY_MODE:-simulated}
       ACP_CORS_ORIGINS: ${ACP_CORS_ORIGINS:-http://localhost:8080}
+      # Secure cookies require an HTTPS edge. The dev quick-start is plain HTTP,
+      # so default to false; production MUST run behind TLS with this true (the
+      # backend refuses to start with it false when ACP_ENVIRONMENT=production).
+      ACP_COOKIE_SECURE: ${ACP_COOKIE_SECURE:-false}
       ACP_FIRST_SUPERUSER_EMAIL: ${ACP_FIRST_SUPERUSER_EMAIL:-admin@example.com}
       ACP_FIRST_SUPERUSER_PASSWORD: ${ACP_FIRST_SUPERUSER_PASSWORD:-admin1234}
     depends_on:
       db:
         condition: service_healthy
+    # --proxy-headers so the client IP behind nginx is honoured for rate limiting.
     command: >
-      sh -c "alembic upgrade head && python -m app.seed &&
-             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+      sh -c "alembic upgrade head &&
+             { [ \"$${ACP_ENVIRONMENT:-development}\" = production ] || python -m app.seed; } &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips '*'"
     ports:
       - "8000:8000"
 
   frontend:
     build: ./frontend
+    restart: unless-stopped
     depends_on:
       - backend
     ports:

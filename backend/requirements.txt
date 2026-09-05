@@ -5,6 +5,11 @@ pydantic[email]>=2.7,<3.0
 pydantic-settings>=2.3,<3.0
 PyJWT>=2.8,<3.0
 bcrypt>=4.1,<5.0
+cryptography>=42,<46
+pyotp>=2.9,<3.0
 python-multipart>=0.0.9
 alembic>=1.13,<2.0
 psycopg2-binary>=2.9,<3.0; platform_system != "Windows"
+# Guarantees the IANA timezone database for zoneinfo (access schedules and the
+# attendance report), independent of the base image's system tz data.
+tzdata>=2024.1
