@@ -22,13 +22,21 @@ Plataforma web SaaS multi-tenant para gestionar controladoras de acceso L04/N300
 - **Importante:** los documentos canónicos nuevos (`IMPLEMENTATION_STATUS`, `REQUIREMENTS_TRACEABILITY`, `TEST_EVIDENCE`, `HARDWARE_STATUS`, `SECURITY`, `BACKUP_RESTORE`) **existen solo en PR #8** hasta que se integren a `claude/develop`.
 - Modo `simulated` por defecto. La comunicación real TCP/UDP con N3000/L04 es **experimental y no verificada** — ver `HARDWARE_STATUS.md`.
 
-### Estado de los PRs
+### Estado de los PRs (GitHub = fuente de verdad)
 
-| PR | Rama | Estado | Nota |
-|---|---|---|---|
-| #7 | `claude/develop` | **Draft, sin fusionar** | Integración de Fases 1–7. |
-| #8 | `claude/docs-consolidation` | **Draft, sin fusionar** | Solo documentación; base `claude/develop`. |
-| #3–#6 | `claude/phase1-*`, `claude/access-control-saas-refactor-6wm329` | **Abiertos** | Contenidos en #7; se conservan como evidencia granular hasta auditar #7 (no cerrados aún). |
+| PR | Rama | Base | Estado | Nota |
+|---|---|---|---|---|
+| #7 | `claude/develop` | `main` | Draft, sin fusionar | Integración de Fases 1–7. |
+| #8 | `claude/docs-consolidation` | `claude/develop` | Draft, sin fusionar | Documentación canónica (este archivo y los demás docs de estado). |
+| #9 | `claude/backup-restore-hardening` | `claude/develop` | Draft, sin fusionar | Endurecimiento de backup/restore + 12 tests. |
+| #10 | `claude/frontend-door-flags-advisory` | `claude/develop` | Draft, sin fusionar | Flags de puerta "no aplicado/experimental" + infra Vitest. |
+| #3–#6 | `claude/phase1-*`, `claude/access-control-saas-refactor-6wm329` | `main` | Abiertos | Contenidos en #7 (verificado por `git merge-base`); se conservan como evidencia granular; no cerrados. |
+
+> **Protocolo de continuidad:** GitHub es la única fuente de verdad. Toda unidad
+> de trabajo termina en commit → push → PR Draft creado/actualizado → este
+> `AI_HANDOFF.md` actualizado (más los docs de estado que correspondan). No se
+> deja trabajo importante solo en sesión/terminal/scratchpad/worktree. No se
+> fusiona, despliega, cierra PR ni toca hardware/producción sin autorización.
 
 ### Comprobar el snapshot y detectar divergencia
 
@@ -64,6 +72,52 @@ git checkout claude/docs-consolidation # la documentación (PR #8)
 Completar la **auditoría de seguridad independiente** (endpoint-por-endpoint IDOR,
 doble aprobación bajo carrera, fuga en logs) y recién después decidir merge de #7.
 No implementar enforcement de flags de puerta ni UI de doble aprobación hasta ese informe.
+
+## Registro de continuidad (última sesión)
+
+> Bloque que se actualiza al cerrar cada unidad de trabajo. Un agente nuevo debe
+> poder continuar leyendo esto + los PRs, sin el historial de chat.
+
+- **Fecha/hora:** 2026-09-06 18:46 UTC (2026-09-06 15:46 `America/Asuncion`).
+- **Repositorio:** `DaltonP93/Cerradura_magnetica`.
+- **Ramas / SHA / PR asociados:**
+  - `claude/develop` → PR **#7** (base `main`) — SHA `b97f5e3` — código de Fases 1–7.
+  - `claude/docs-consolidation` → PR **#8** (base `develop`) — documentación canónica.
+  - `claude/backup-restore-hardening` → PR **#9** (base `develop`) — SHA `4e1e9d8`.
+  - `claude/frontend-door-flags-advisory` → PR **#10** (base `develop`) — SHA `20856e0`.
+- **Cambios realizados esta sesión:**
+  - Auditoría multiagente (funcional, DevOps, documentación, seguridad independiente) consolidada.
+  - PR #8: docs canónicos (este archivo, `IMPLEMENTATION_STATUS`, `REQUIREMENTS_TRACEABILITY`, `TEST_EVIDENCE`, `HARDWARE_STATUS`, `SECURITY`, `BACKUP_RESTORE`); `DEVELOPMENT_LOG` marcado histórico; README con "Estado y continuidad".
+  - PR #9: `backup_db.sh`/`restore_db.sh` endurecidos (propagación de error real, `gzip -t`, restore por base temporal + swap, `--confirm <DB_NAME>`) + 12 tests con `docker compose` falso.
+  - PR #10: flags de puerta marcados "no aplicado/experimental" en la UI (sin enforcement) + infra Vitest + 5 tests + paso de CI.
+- **Pruebas ejecutadas (reales):**
+  - Backend (develop + tests de scripts) — **189 passed** local (177 + 12); `ruff check .` limpio.
+  - Frontend — **5 passed** (`npm test`); `npm run build` (tsc + vite) OK.
+  - CI de #8/#9/#10 en GitHub Actions: **pendiente de verificar** (ver "Bloqueos").
+- **Migraciones:** ninguna nueva en #8/#9/#10. `claude/develop` mantiene head único `e0f1a2b3c4d5`.
+- **Riesgos:** seguridad F-1…F-11 (0 P0, 0 P1; 5 P2, 6 P3 — ver `SECURITY.md`), cada uno pendiente de su PR de fix; backlog operativo P1 (Redis, TLS, migraciones como job, prueba real de restore). Vitest agrega vulns de tooling dev (no afectan `npm audit --omit=dev`).
+- **Bloqueos:**
+  - Al momento de este registro, la API REST de GitHub estuvo con *rate limit*; la conversión de **PR #7 a Draft** y su tabla de contención de #3–#6 quedó **pendiente de aplicar** (los `git push` sí funcionaron).
+  - Prueba real de restore y toda validación de hardware: requieren entorno/placa autorizados.
+- **Trabajo pendiente:** aplicar Draft+cuerpo a #7; abrir PRs de fix para F-1…F-11; verificar CI de #8/#9/#10; UI de doble aprobación (tras auditar su backend); enforcement de flags (P0-1).
+- **Próxima tarea recomendada:** PRs de fix **F-2** (`--forwarded-allow-ips *`) y **F-1** (carrera de lockout) — juntos habilitan fuerza bruta; ramas separadas con tests. Luego F-4/F-3.
+
+## Diferenciación de estado (obligatoria; no declarar "terminado" a la ligera)
+
+Al reportar una función usar exactamente uno de estos estados y su evidencia:
+
+| Estado | Significado |
+|---|---|
+| **Implementado** | Código en la rama; aún sin correr pruebas. |
+| **Probado localmente** | Pruebas verdes en esta máquina (no en CI). |
+| **Probado en CI** | Job de GitHub Actions verde (verificado, con enlace/run). |
+| **Simulado** | Funciona solo contra el gateway `simulated`. |
+| **Pendiente de revisión** | En un PR Draft, esperando revisión/aprobación. |
+| **Pendiente de hardware real** | Requiere placa N3000/L04 para validarse. |
+| **Bloqueado** | Depende de spec/autorización/insumo no disponible. |
+
+> "Compila" o "tests simulados en verde" **no** es "terminado". El detalle
+> fase→estado→evidencia vive en `IMPLEMENTATION_STATUS.md` y la matriz.
 
 ## Mapa de documentación (fuente de verdad por tema)
 
