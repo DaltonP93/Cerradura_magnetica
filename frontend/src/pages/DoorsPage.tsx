@@ -18,7 +18,12 @@ import { Badge } from '../components/StatusBadge';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { DOOR_MODE_LABELS } from '../lib/format';
-import { ADVANCED_FLAGS_NOTICE, activeAdvancedFlags, flagBadgeLabel } from '../lib/doorFlags';
+import {
+  ADVANCED_FLAGS_ENFORCED,
+  ADVANCED_FLAGS_NOTICE,
+  activeAdvancedFlags,
+  flagBadgeLabel,
+} from '../lib/doorFlags';
 import { useFetch } from '../lib/useFetch';
 import type { Door, DoorMode } from '../types';
 
@@ -266,11 +271,13 @@ export function DoorsPage() {
               <Checkbox
                 label="Anti-passback (no aplicado)"
                 checked={form.anti_passback}
+                disabled={!ADVANCED_FLAGS_ENFORCED}
                 onChange={(v) => setForm({ ...form, anti_passback: v })}
               />
               <Checkbox
                 label="Apertura con primera tarjeta (no aplicado)"
                 checked={form.first_card_open}
+                disabled={!ADVANCED_FLAGS_ENFORCED}
                 onChange={(v) => setForm({ ...form, first_card_open: v })}
               />
             </div>
@@ -280,6 +287,7 @@ export function DoorsPage() {
             >
               <Select
                 value={form.multi_card_count}
+                disabled={!ADVANCED_FLAGS_ENFORCED}
                 onChange={(e) => setForm({ ...form, multi_card_count: e.target.value })}
               >
                 {[1, 2, 3, 4].map((n) => (
