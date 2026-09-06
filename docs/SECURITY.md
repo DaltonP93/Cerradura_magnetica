@@ -74,11 +74,48 @@
 | R-5 | `/metrics` abierto si no se setea `ACP_METRICS_TOKEN` | Media | Exposición de métricas internas | Exigir token o restringir en el borde en prod |
 | R-6 | Sin restore probado de la DB | Media (operacional) | Backup no verificable | Ver `BACKUP_RESTORE.md` (P0-3) |
 
-## Pendiente de verificación (NO_VERIFICADO)
+## Auditoría de seguridad independiente (2026-09-06)
 
-- Pasada adversarial completa de **IDOR** endpoint por endpoint (Agente 1 verificó el patrón de scoping en `deps.py`, pero no se recorrieron todos los handlers con IDs cross-org).
-- Tests negativos reproducibles de bypass de doble aprobación bajo carrera más allá de los 10 tests actuales.
-- Revisión de fuga de datos en mensajes de error / logs (más allá del enmascarado de tarjeta).
+Un agente de seguridad independiente (solo lectura) auditó el SHA
+`b97f5e3` (verificado vía `git worktree`, 177 tests en verde). **Resultado:
+postura sólida — 0 P0, 0 P1, 5 P2, 6 P3.** Sin fuga de aislamiento multi-tenant
+ni de PIN. Los hallazgos son de defensa-en-profundidad y dependencia del borde.
 
-> Estos ítems deben cubrirse en una segunda tanda del agente de seguridad; no se
-> declaran resueltos.
+**Ítems antes `NO_VERIFICADO`, ahora resueltos por la auditoría:**
+- **IDOR endpoint-por-endpoint:** revisado `api/v1/*.py` completo; todo handler con id filtra por `organization_id`. Sin IDOR explotable (único hueco *latente*: F-9 abajo).
+- **Doble aprobación bajo carrera:** `claim_for_approval` usa CAS real (`UPDATE ... WHERE status=PENDING AND expires_at>now` + `rowcount==1`); dos aprobadores concurrentes **no** pueden ejecutar dos aperturas. Correcto.
+- **Fuga en logs/errores:** tarjetas enmascaradas en eventos/auditoría/inbox/swipe; PIN nunca sale y viaja cifrado; solo se guardan hashes de tokens. Excepción: F-6 (importador).
+
+Los 11 controles marcados resueltos por el líder fueron **confirmados** por la
+auditoría (con 2 matices: F-2 y F-6).
+
+### Hallazgos nuevos (cada uno → **PR separado**, no se corrigen en PR #8)
+
+| ID | Sev | Hallazgo | Archivo:función | Corrección mínima |
+|---|---|---|---|---|
+| F-1 | P2 | Carrera lost-update en el lockout (`+=1` read-modify-write no atómico) debilita anti-fuerza-bruta | `api/v1/auth.py::login` | `UPDATE ... failed_login_count = failed_login_count + 1` atómico o `with_for_update` |
+| F-2 | P2 | `--forwarded-allow-ips *`: confía en `X-Forwarded-For` de cualquier peer → bypass rate-limit por IP + IP falsificable en auditoría/sesión | `backend/Dockerfile`; `core/ratelimit.py`, `services/audit.py`, `services/sessions.py` | Restringir a la IP del reverse proxy; nunca `*` |
+| F-3 | P2 | WebSocket sin verificación de `Origin` → CSWSH si `ACP_COOKIE_SAMESITE=none` | `api/v1/ws.py::events_ws` | Validar `Origin` contra `cors_origin_list` en el handshake por cookie |
+| F-4 | P2 | Confianza ciega en el header de fingerprint del bridge (no es secreto) → suplantación si el edge no strippea el header | `api/v1/gateway_bridge.py::get_current_bridge` | Secreto por-bridge (token emitido al registrar, hasheado) además del fingerprint |
+| F-5 | P2 | MFA sin códigos de recuperación ni reset por admin → lockout permanente ante pérdida del TOTP | `api/v1/auth.py`, `schemas/auth.py` (UserUpdate sin campos mfa) | Recovery codes de un uso (hasheados) y/o endpoint de reset admin auditado |
+| F-6 | P3 | Nº de tarjeta en claro en errores del importador (inconsistente con masking) | `services/importer.py::_build_plan` | `mask_card()` en los mensajes de error |
+| F-7 | P3 | `/metrics` abierto por defecto (no en `production_issues`) + compare no constante | `main.py::prometheus_metrics`, `core/config.py` | Exigir token en prod; `secrets.compare_digest` |
+| F-8 | P3 | Enumeración de usuarios/tenants (timing bcrypt; 409 de unicidad global de email/serial) | `api/v1/auth.py::login`, `users.py`, `controllers.py` | Hash dummy en tiempo constante; 409 genéricos |
+| F-9 | P3 | `get_or_404` con fallback `getattr(obj,"organization_id",org_id)` → IDOR latente para futuros modelos sin `organization_id` | `api/helpers.py::get_or_404` | Requerir el atributo; fallar-cerrado |
+| F-10 | P3 | Inbox: duplicado concurrente del mismo `event_uid` rompe el lote entero (sin manejo de IntegrityError por-fila) | `services/gateway_inbox.py::ingest_events` | `INSERT ... ON CONFLICT DO NOTHING` o savepoints por evento |
+| F-11 | P3 | Apertura remota no idempotente ante doble-submit (modo bridge): `uuid4` por llamada → doble apertura | `services/command_dispatch.py::enqueue_command` | Aceptar `Idempotency-Key` del cliente como clave del outbox |
+
+> Prioridad de PRs sugerida por la auditoría: **F-2 y F-1** primero (habilitan
+> fuerza bruta combinada), luego F-4 y F-3, luego F-5 (disponibilidad), y los P3
+> como higiene. **Ninguno se corrige en el PR documental (#8);** cada uno va en su
+> propia rama con tests. Informe completo: `scratchpad/audit4_security_independent.md`.
+
+## Riesgos abiertos priorizados (operacionales / funcionales)
+
+| ID | Riesgo | Severidad | Impacto | Mitigación propuesta |
+|---|---|---|---|---|
+| R-1 | Rate-limit, revocación WS y métricas **en memoria por-proceso** | Alta (operacional) | Escalar a >1 worker rompe el límite de auth y demora la revocación al `ws_revalidate_seconds` | Introducir Redis (store + pub/sub) antes de multi-worker; hoy: **mandar un solo worker** |
+| R-2 | Revocaciones **no propagadas a la placa** | Alta (seguridad física) | Una credencial revocada sigue válida en la memoria de la placa hasta un sync manual | Encolar baja en el outbox al revocar; sincronización automática |
+| R-3 | Flags avanzados de puerta **sin enforcement** | Alta (falsa seguridad) | La UI sugiere protección (anti-passback, interlock) que no existe | Marcar "no aplicado/experimental" en la UI (PR frontend en curso) o implementar en el motor |
+| R-4 | Sin **pip-audit** en backend | Media | Vulnerabilidades de deps Python sin detectar | Agregar `pip-audit` al job de CI |
+| R-5 | Backup ocultaba fallos + sin restore probado | Media (operacional) | Backup no confiable/verificable | Endurecido en PR #9 (falta prueba real autorizada) |
