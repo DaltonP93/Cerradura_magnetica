@@ -92,10 +92,19 @@ def test_card_record_round_trip():
     assert decoded.valid_to == date(2026, 6, 30)
 
 
-def test_put_card_frame_carries_16_byte_payload():
+def test_put_card_frame_round_trips():
     frame = decode_frame(encode_frame(build_put_card(SERIAL, CardRecord(number=42))))
     assert frame.function == 0x50
     assert decode_card(frame.data).number == 42
+
+
+def test_card_number_supports_64_bit_wiegand():
+    big = 0xFFFFFFFFFFFFFFFF  # max 64-bit, would overflow a 32-bit field
+    decoded = decode_card(encode_card(CardRecord(number=big, doors=(1, 2, 3, 4))))
+    assert decoded.number == big
+    from app.services.protocol import ProtocolError
+    with pytest.raises(ProtocolError):
+        encode_card(CardRecord(number=big + 1))  # beyond 64-bit is rejected
 
 
 def test_parse_ack_true_and_false():

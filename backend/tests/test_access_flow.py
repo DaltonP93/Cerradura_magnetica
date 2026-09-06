@@ -190,3 +190,24 @@ def test_duplicate_card_number_rejected(client, admin_headers, setup_access):
         headers=admin_headers,
     )
     assert resp.status_code == 409
+
+
+def test_keypad_virtual_card_number_resolves_to_pin(client, admin_headers, operator_headers, setup_access):
+    """A keypad emits a PIN as a 10-digit card number; it resolves to the PIN credential."""
+    holder_id = setup_access["holder"]["id"]
+    cred = client.post(
+        f"/api/v1/cardholders/{holder_id}/credentials",
+        json={"card_number": "77001", "type": "pin", "pin": "4321"},
+        headers=admin_headers,
+    )
+    assert cred.status_code == 201, cred.text
+    door_id = setup_access["doors"][0]["id"]
+    # PIN 4321 -> virtual card number "0000004321"; no separate PIN is sent.
+    result = swipe(client, operator_headers, door_id, "0000004321")
+    assert result["granted"] is True
+    assert result["cardholder_id"] == holder_id
+
+
+def test_unknown_virtual_card_number_denied(client, operator_headers, setup_access):
+    door_id = setup_access["doors"][0]["id"]
+    assert swipe(client, operator_headers, door_id, "0000009999")["reason"] == "unknown_credential"

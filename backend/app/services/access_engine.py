@@ -27,6 +27,7 @@ from app.models import (
     Schedule,
 )
 from app.services.events import record_event
+from app.services.wiegand import looks_like_virtual_card, virtual_card_number
 
 
 @dataclass
@@ -46,6 +47,25 @@ def _pin_matches(presented: str | None, stored: str | None) -> bool:
     if not presented or not stored:
         return False
     return secrets.compare_digest(presented, stored)
+
+
+def _resolve_virtual_pin(db: Session, organization_id: int, card_number: str) -> Credential | None:
+    """Match a 10-digit keypad virtual card number to its active PIN credential."""
+    if not looks_like_virtual_card(card_number):
+        return None
+    credentials = db.execute(
+        select(Credential)
+        .options(selectinload(Credential.cardholder))
+        .where(
+            Credential.organization_id == organization_id,
+            Credential.type == CredentialType.PIN,
+            Credential.is_active.is_(True),
+        )
+    ).scalars()
+    for credential in credentials:
+        if credential.pin and virtual_card_number(credential.pin) == card_number:
+            return credential
+    return None
 
 
 def _as_utc(dt: datetime | None) -> datetime | None:
@@ -108,14 +128,28 @@ def evaluate_access(
             Credential.card_number == card_number,
         )
     ).scalar_one_or_none()
+
+    # Keypad "virtual card number" mode: a typed PIN arrives as a 10-digit card
+    # number. If it matches no real card, resolve it to the PIN credential that
+    # produced it — the PIN is inherently verified by that match.
+    pin_verified_by_virtual = False
     if credential is None:
-        return AccessDecision(False, DeniedReason.UNKNOWN_CREDENTIAL)
+        credential = _resolve_virtual_pin(db, organization_id, card_number)
+        if credential is None:
+            return AccessDecision(False, DeniedReason.UNKNOWN_CREDENTIAL)
+        pin_verified_by_virtual = True
+
     if not credential.is_active:
         return AccessDecision(False, DeniedReason.CREDENTIAL_INACTIVE, credential.cardholder, credential)
     # A PIN is mandatory for both card+PIN and PIN-only credentials. Without
     # this, a PIN-only credential would be granted on the card number alone,
-    # bypassing its second factor (invariant #3).
-    if credential.type in _PIN_REQUIRED and not _pin_matches(pin, credential.pin):
+    # bypassing its second factor (invariant #3). A virtual-card match already
+    # proves the PIN.
+    if (
+        credential.type in _PIN_REQUIRED
+        and not pin_verified_by_virtual
+        and not _pin_matches(pin, credential.pin)
+    ):
         return AccessDecision(False, DeniedReason.WRONG_PIN, credential.cardholder, credential)
 
     holder = credential.cardholder

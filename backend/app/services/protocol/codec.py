@@ -85,26 +85,32 @@ class CardRecord:
     valid_to: date | None = None
 
 
+# Card number is a 64-bit little-endian integer: readers emit Wiegand formats up
+# to 64/66 bits (see docs/HARDWARE.md), so a 32-bit field would truncate them.
+_CARD_NUMBER_MAX = 0xFFFFFFFFFFFFFFFF
+CARD_PAYLOAD_LEN = 20  # number(8) + from(4) + to(4) + door flags(4)
+
+
 def encode_card(card: CardRecord) -> bytes:
-    """16-byte put-card payload: number(LE u32) + from(4) + to(4) + door flags(4)."""
-    if not 0 <= card.number <= 0xFFFFFFFF:
-        raise ProtocolError(f"card number out of range: {card.number}")
+    """20-byte put-card payload: number(LE u64) + from(4) + to(4) + door flags(4)."""
+    if not 0 <= card.number <= _CARD_NUMBER_MAX:
+        raise ProtocolError(f"card number out of range (64-bit): {card.number}")
     for d in card.doors:
         if d not in _DOORS:
             raise ProtocolError(f"door out of range 1-4: {d}")
-    payload = struct.pack("<I", card.number)
+    payload = struct.pack("<Q", card.number)
     payload += encode_date(card.valid_from) + encode_date(card.valid_to)
     payload += bytes(1 if d in card.doors else 0 for d in _DOORS)
     return payload
 
 
 def decode_card(payload: bytes) -> CardRecord:
-    if len(payload) < 16:
-        raise ProtocolError(f"card payload must be >= 16 bytes, got {len(payload)}")
-    number = struct.unpack_from("<I", payload, 0)[0]
-    valid_from = decode_date(payload[4:8])
-    valid_to = decode_date(payload[8:12])
-    doors = tuple(d for i, d in enumerate(_DOORS) if payload[12 + i] == 1)
+    if len(payload) < CARD_PAYLOAD_LEN:
+        raise ProtocolError(f"card payload must be >= {CARD_PAYLOAD_LEN} bytes, got {len(payload)}")
+    number = struct.unpack_from("<Q", payload, 0)[0]
+    valid_from = decode_date(payload[8:12])
+    valid_to = decode_date(payload[12:16])
+    doors = tuple(d for i, d in enumerate(_DOORS) if payload[16 + i] == 1)
     return CardRecord(number=number, doors=doors, valid_from=valid_from, valid_to=valid_to)
 
 
