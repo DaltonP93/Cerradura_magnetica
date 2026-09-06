@@ -11,61 +11,68 @@
 
 | Componente | Estado | Nota |
 |---|---|---|
-| Backup (`scripts/backup_db.sh`) | `OPEN_PR_UNVERIFIED` | Script existe, **pero tiene un defecto conocido** (ver abajo). No ejercido en CI. |
-| Restore | `PLANNED` | **No hay script confiable todavía.** El endurecimiento (backup + restore + tests) va en un PR operativo separado: rama `claude/backup-restore-hardening`. |
-| Prueba de restore | `PLANNED` | Un backup sin restore probado **no es un backup**. |
-| RPO / RTO | `PLANNED` | A definir con el dueño. |
+| Backup (`scripts/backup_db.sh`) | `OPEN_PR_UNVERIFIED` (PR #9) | Endurecido: un `pg_dump` fallido hace fallar el script; sin dump parcial. |
+| Restore (`scripts/restore_db.sh`) | `OPEN_PR_UNVERIFIED` (PR #9) | **Swap no destructivo** con rollback (ver abajo). |
+| Tests de scripts (fakes) | Probado localmente + en CI | `backend/tests/test_backup_restore_scripts.py` (22). |
+| Prueba real en PostgreSQL | Probado en CI | Job `backup-restore-postgres` (`test_backup_restore_integration.py`). |
+| Prueba en entorno autorizado / hardware | `PLANNED` / `BLOCKED` | Requiere autorización (invariante #7). |
 
-> **Este documento (PR #8) es solo documentación.** El script y sus pruebas se
-> entregan en el PR operativo, no acá.
+> El endurecimiento vive en **PR #9** (`claude/backup-restore-hardening`),
+> pendiente de revisión. No se ejecuta contra producción sin autorización.
 
-## Defecto conocido del backup actual (P0)
+## Backup — `scripts/backup_db.sh`
 
-`scripts/backup_db.sh` corre bajo `#!/usr/bin/env sh` con `set -eu` pero **sin
-`pipefail`**, y usa un pipeline `pg_dump ... | gzip > out`. Como `sh` toma el
-código de salida del **último** comando del pipeline (`gzip`), **un `pg_dump`
-fallido puede reportarse como éxito** y dejar un `.gz` parcial (~20 bytes) que
-parece un backup válido. Reproducción:
+Corre `pg_dump` dentro del servicio compose `db`. Garantías:
 
-```sh
-COMPOSE=/bin/false scripts/backup_db.sh   # imprime "Backup complete", código 0, gz basura
-```
-
-Esto se corrige en el PR operativo `claude/backup-restore-hardening`.
-
-## Backup — uso previsto (una vez endurecido)
+- `umask 077` (dumps solo-dueño).
+- **No** usa el pipe `pg_dump | gzip`: vuelca a un temp, **verifica el código de
+  salida de `pg_dump`**, rechaza dump vacío, comprime, valida con `gzip -t` y
+  publica con **rename atómico**. Un fallo no deja `.sql.gz` ni temporales.
+- La retención (`RETENTION_DAYS`) corre **solo tras un backup exitoso**.
 
 ```bash
-# manual
 BACKUP_DIR=/srv/acp-backups RETENTION_DAYS=14 scripts/backup_db.sh
-
-# cron (diario 02:00)
+# cron diario 02:00
 0 2 * * *  BACKUP_DIR=/srv/acp-backups /path/to/scripts/backup_db.sh >> /var/log/acp-backup.log 2>&1
 ```
 
-Variables: `BACKUP_DIR` (def. `./backups`), `RETENTION_DAYS` (def. 14),
-`POSTGRES_USER` (def. `acp`), `POSTGRES_DB` (def. `access_control`), `COMPOSE`.
+## Restore — `scripts/restore_db.sh` (swap no destructivo)
 
-## Restore — requisitos del PR operativo (aún no implementado)
+**La base activa nunca se elimina antes de instalar un reemplazo validado.**
 
-El script de restore **no existe todavía como componente confiable**. El PR
-operativo debe garantizar, con pruebas automatizadas (fakes):
+```bash
+scripts/restore_db.sh backups/acp-20260906T020000Z.sql.gz --confirm access_control
+```
 
-- Validar argumentos **antes** de contactar PostgreSQL.
-- `gzip -t` sobre el dump **antes** de tocar la base; rechazar dump vacío o corrupto.
-- Validación estricta de `DB_NAME`/`DB_USER`; rechazar `postgres`, `template0`, `template1`.
-- Confirmación asociada al **nombre exacto** de la base (no un `--force` genérico).
-- Propagación de errores en pipelines (`pipefail` o equivalente POSIX); nunca anunciar éxito si `gunzip`/`psql`/validación fallan.
-- Restaurar preferentemente en una **base temporal**, validar (esquema, org de prueba, revisión Alembic) y recién entonces reemplazar el destino; limpiar la temporal ante error.
-- Impedir que el backend esté reconectándose durante el reemplazo.
-- Documentar el rollback de una restauración fallida.
+Flujo:
+1. Valida argumentos y `gzip -t` **antes** de tocar PostgreSQL.
+2. Toma un **mutex** (lockdir) para impedir dos restores simultáneos.
+3. Restaura el dump en una **base temporal** y la **valida** (`alembic_version` +
+   `organizations`); el código de salida y el valor se verifican por separado
+   (sin `psql | grep`).
+4. Swap por renames: `activa → <db>_recovery_<stamp>`, luego `temp → activa`.
+   - Si el segundo rename falla → **rollback automático** `recovery → activa`
+     (la base original nunca se pierde). Si el rollback también falla → `FATAL`
+     con instrucciones de recuperación manual (no se borra nada).
+   - Durante la ventana: `ALLOW_CONNECTIONS=false` + `pg_terminate_backend` para
+     que el backend no reconecte. **Aun así, detené el backend antes.**
+5. **Smoke test** post-swap; si falla, rollback a la recovery (la sospechosa
+   queda como `<db>_failed_<stamp>` para inspección).
+6. La base anterior se **conserva** como `<db>_recovery_<stamp>` y **NO se borra**.
 
-## Prueba periódica (obligatoria una vez exista el restore)
+Borrado definitivo (acción explícita, separada, solo tras verificar la app):
 
-1. Levantar un entorno compose **aislado** (no producción).
-2. Restaurar el último dump.
-3. Verificar conteos, `alembic current`, y un login de humo.
-4. Registrar fecha y resultado.
+```bash
+scripts/restore_db.sh --drop-recovery <db>_recovery_<stamp> --confirm <db>_recovery_<stamp>
+```
 
-> No ejecutar restore contra producción. No se ejecuta sin autorización del
-> dueño (invariante #7).
+## Prueba periódica (obligatoria)
+
+1. Entorno compose **aislado** (no producción).
+2. Restaurar el último dump; verificar conteos, `alembic current`, login de humo.
+3. Borrar la recovery con `--drop-recovery`. Registrar fecha y resultado.
+
+## Objetivos (a definir con el dueño)
+
+- **RPO / RTO:** no definidos. Con backup diario, RPO por defecto ≤24 h.
+- **DR / failover de DB:** no implementado (sin réplica). Riesgo operacional documentado.

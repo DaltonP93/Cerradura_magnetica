@@ -74,9 +74,9 @@
 
 | # | Ítem | Por qué | Dónde |
 |---|---|---|---|
-| P0-1 | **Enforcement de flags de puerta o quitarlos de la UI** | Hoy la UI presenta anti-passback/interlock/multicard/first-card como activos pero **ningún motor los aplica** → falsa sensación de seguridad física. Mínimo: marcar como "no aplicado" en UI; ideal: implementar en el motor. | `access_engine.py`, `DoorsPage.tsx` |
-| P0-2 | **UI de doble aprobación** | El backend rechaza (409) la apertura de puertas críticas y el SPA no ofrece forma de completar el flujo → puerta crítica inoperable desde la interfaz. | `frontend/src/api/index.ts`, nueva página |
-| P0-3 | **Backup/restore endurecido + probado** | El backup actual **oculta fallos de `pg_dump`** (pipeline sin `pipefail`) y **no hay restore confiable**. Va en un PR operativo separado (`claude/backup-restore-hardening`) con tests. Estado: `PLANNED`. | `scripts/`, `BACKUP_RESTORE.md` |
+| P0-1 | **Falsa seguridad de flags mitigada en UI** (enforcement real sigue pendiente) | La UI ya NO presenta anti-passback/interlock/multicard/first-card como activos: badges "no aplicado", banner y **edición deshabilitada** (`ADVANCED_FLAGS_ENFORCED=false`). El **enforcement en el motor** sigue pendiente (requiere hardware). Estado: **PR #10 abierto** (mitigación UI); enforcement `PLANNED`. | `frontend/lib/doorFlags.ts`, `DoorsPage.tsx`, `ControllersPage.tsx` |
+| P0-2 | **UI de doble aprobación** | El backend (CONFIRMADO por auditoría) rechaza (409) la apertura de puertas críticas y el SPA no ofrece forma de completar el flujo → puerta crítica inoperable desde la interfaz. Estado: `PLANNED` (pendiente). | `frontend/src/api/index.ts`, nueva página |
+| P0-3 | **Backup/restore endurecido + probado** | ✅ **Corregido en PR #9 (abierto):** backup ya no oculta fallos de `pg_dump`; restore con swap **no destructivo** + rollback + mutex; 22 tests fake + test real en PostgreSQL en CI. Estado: **PR #9 abierto**, pendiente de confirmar CI real y prueba en entorno autorizado. | `scripts/`, `BACKUP_RESTORE.md` |
 
 ### P1 — Robustez / operación
 
@@ -118,11 +118,19 @@
 - Daemon puente real (Windows/Linux) + eventos físicos reales (`BLOCKED_HARDWARE`).
 - Alta de tarjeta por lector USB WG1028; módulos de nicho del legacy (Meal/Patrol/Meeting) (`PLANNED` / `BLOCKED_HARDWARE`).
 
-## Estado de PRs
+## Estado de PRs (todos Draft, sin fusionar)
 
-| PR | Rama | Estado |
-|---|---|---|
-| #7 | `claude/develop` | Integración activa; apila Fases 1–7. **No fusionar** hasta autorización. |
-| #3–#6 | `claude/phase1-*`, `claude/access-control-saas-refactor-6wm329` | **SUPERSEDED por #7** (contenidos en la rama de integración). |
+| PR | Rama | Base | Estado |
+|---|---|---|---|
+| #7 | `claude/develop` | `main` | Draft. Integración de Fases 1–7. **No fusionar** hasta auditar #7. |
+| #8 | `claude/docs-consolidation` | `claude/develop` | Draft. Documentación canónica (este doc y los demás de estado). |
+| #9 | `claude/backup-restore-hardening` | `claude/develop` | Draft. Backup/restore endurecido + tests (fakes + PG real en CI). |
+| #10 | `claude/frontend-door-flags-advisory` | `claude/develop` | Draft. Flags "no aplicado" + edición deshabilitada + infra de tests. |
+| #3–#6 | `claude/phase1-*`, `claude/access-control-saas-refactor-6wm329` | `main` | Abiertos, contenidos en #7 (verificado por `git merge-base`); **no cerrados**. |
 
-Ver `AI_HANDOFF.md` para el índice maestro y `REQUIREMENTS_TRACEABILITY.md` para la matriz completa de 54 requisitos.
+## Hallazgos de seguridad pendientes (de PRs de fix separados)
+
+La auditoría independiente arrojó **0 P0, 0 P1, 5 P2, 6 P3** (F-1…F-11 en `SECURITY.md`).
+Ninguno tiene aún PR de corrección; prioridad sugerida: **F-2** (`--forwarded-allow-ips *`) y **F-1** (carrera de lockout), luego F-4/F-3, luego F-5.
+
+Ver `AI_HANDOFF.md` para el índice maestro y `REQUIREMENTS_TRACEABILITY.md` para la matriz completa de requisitos.

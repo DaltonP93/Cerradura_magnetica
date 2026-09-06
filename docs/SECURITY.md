@@ -5,11 +5,12 @@
 > actual (`claude/develop`, auditoría 2026-09-06). Un ítem se marca RESUELTO solo
 > con evidencia actual (archivo:línea o test).
 >
-> **Nota de método:** la auditoría de seguridad dedicada quedó parcialmente
-> cubierta por el líder tras un corte de sesión del agente de seguridad. Las
-> reconciliaciones de abajo están respaldadas por lectura de código y por los
-> tests verdes citados; los ítems marcados `NO_VERIFICADO` requieren una pasada
-> adversarial adicional.
+> **Nota de método:** la **auditoría de seguridad independiente ya se completó**
+> (solo lectura, SHA `b97f5e3`, 177 tests verdes; ver la sección "Auditoría de
+> seguridad independiente" más abajo con los hallazgos F-1…F-11). Las
+> reconciliaciones están respaldadas por lectura de código y tests. Ya no quedan
+> ítems `NO_VERIFICADO` de la primera tanda: IDOR endpoint-por-endpoint, doble
+> aprobación bajo carrera y fuga en logs fueron verificados.
 
 ## Invariantes (única sede canónica; el resto de docs enlaza aquí)
 
