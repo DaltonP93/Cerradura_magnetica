@@ -7,21 +7,34 @@
 ## Resumen
 
 - **Total: 177 tests** (`def test_`) en **23 archivos**, todos en verde.
-- Corrida verificada: `pytest tests -q` → **177 passed, 1 warning** (~308 s en SQLite).
-- Lint: `ruff check .` limpio (incluye migraciones y `env.py`).
-- CI adicional: job `backend-postgres` corre migraciones + suite contra **PostgreSQL 16** real.
+- Cubren backend sobre el gateway `simulated` y vectores de protocolo **sintéticos**.
 
-> ⚠️ **Caveat central del proyecto:** estos tests cubren la lógica de plataforma
-> sobre el gateway `simulated` y vectores de protocolo **sintéticos**. **Un test
-> verde no equivale a validación contra una placa N3000/L04 real.** Ver
-> `HARDWARE_STATUS.md`.
+> ⚠️ **Caveat central del proyecto:** **un test verde no equivale a validación
+> contra una placa N3000/L04 real.** Ver `HARDWARE_STATUS.md`.
 
-## Comandos
+## Evidencia de CI (PR #8, rama `claude/docs-consolidation`)
+
+| Job | Resultado | Duración aprox. |
+|---|---|---|
+| backend (SQLite) | **177 passed, 2 warnings** | ~294.59 s |
+| backend-postgres (PostgreSQL 16) | **177 passed, 2 warnings** | ~313.72 s |
+| frontend build (`npm run build`, tsc + vite) | **correcto** | — |
+| `npm audit --omit=dev --audit-level=high` (deps de producción) | **0 vulnerabilidades** | — |
+
+**Warnings registrados (no fallan la suite):**
+- 2 warnings de `pytest` provenientes de **Starlette / `TestClient`** (deprecaciones de la librería de test), presentes en ambos jobs.
+- GitHub Actions emite una **advertencia por acciones basadas en Node 20** (deprecación del runner), independiente del código de la app.
+
+**Sobre auditoría de dependencias del frontend:**
+- El gate de CI es `npm audit --omit=dev` (solo producción) → **0 vulnerabilidades**.
+- `npm ci` (árbol completo, incluyendo dev/tooling) reporta **2 vulnerabilidades** de tooling de desarrollo. **No** se afirma "queda exactamente un advisory" sin adjuntar la salida de `npm audit`; el número vigente sale de correr `npm audit` en `frontend/`.
+
+## Comandos canónicos
 
 ```bash
 cd backend
 pytest tests -q        # suite completa (SQLite por defecto)
-ruff check app tests   # lint
+ruff check .           # lint — comando EXACTO que corre CI (incluye migraciones y env.py)
 ```
 
 En CI (`.github/workflows/ci.yml`):

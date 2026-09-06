@@ -76,7 +76,7 @@
 |---|---|---|---|
 | P0-1 | **Enforcement de flags de puerta o quitarlos de la UI** | Hoy la UI presenta anti-passback/interlock/multicard/first-card como activos pero **ningún motor los aplica** → falsa sensación de seguridad física. Mínimo: marcar como "no aplicado" en UI; ideal: implementar en el motor. | `access_engine.py`, `DoorsPage.tsx` |
 | P0-2 | **UI de doble aprobación** | El backend rechaza (409) la apertura de puertas críticas y el SPA no ofrece forma de completar el flujo → puerta crítica inoperable desde la interfaz. | `frontend/src/api/index.ts`, nueva página |
-| P0-3 | **Restore de base de datos** | Existe backup pero **no hay script ni prueba de restore** → "un backup no probado no es un backup". | `scripts/`, `BACKUP_RESTORE.md` |
+| P0-3 | **Backup/restore endurecido + probado** | El backup actual **oculta fallos de `pg_dump`** (pipeline sin `pipefail`) y **no hay restore confiable**. Va en un PR operativo separado (`claude/backup-restore-hardening`) con tests. Estado: `PLANNED`. | `scripts/`, `BACKUP_RESTORE.md` |
 
 ### P1 — Robustez / operación
 

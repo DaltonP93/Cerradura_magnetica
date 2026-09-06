@@ -1,17 +1,39 @@
 # Backup y restauración — Control de Acceso / Cerradura Magnética
 
-> Procedimiento canónico de backup **y restore** de la base PostgreSQL.
+> Procedimiento canónico de backup **y** restore de la base PostgreSQL.
 > `DEPLOYMENT.md` enlaza aquí en lugar de duplicar esta sección.
 >
 > ⚠️ Los dumps contienen **datos personales, metadata de credenciales y
 > auditorías**. Guardarlos en almacenamiento separado y con control de acceso.
 > No versionarlos (invariante #6).
 
-## Backup
+## Estado
 
-Script: `scripts/backup_db.sh`. Corre `pg_dump` dentro del servicio compose `db`
-(no requiere cliente en el host), comprime con gzip, marca con timestamp UTC y
-poda dumps más viejos que `RETENTION_DAYS`.
+| Componente | Estado | Nota |
+|---|---|---|
+| Backup (`scripts/backup_db.sh`) | `OPEN_PR_UNVERIFIED` | Script existe, **pero tiene un defecto conocido** (ver abajo). No ejercido en CI. |
+| Restore | `PLANNED` | **No hay script confiable todavía.** El endurecimiento (backup + restore + tests) va en un PR operativo separado: rama `claude/backup-restore-hardening`. |
+| Prueba de restore | `PLANNED` | Un backup sin restore probado **no es un backup**. |
+| RPO / RTO | `PLANNED` | A definir con el dueño. |
+
+> **Este documento (PR #8) es solo documentación.** El script y sus pruebas se
+> entregan en el PR operativo, no acá.
+
+## Defecto conocido del backup actual (P0)
+
+`scripts/backup_db.sh` corre bajo `#!/usr/bin/env sh` con `set -eu` pero **sin
+`pipefail`**, y usa un pipeline `pg_dump ... | gzip > out`. Como `sh` toma el
+código de salida del **último** comando del pipeline (`gzip`), **un `pg_dump`
+fallido puede reportarse como éxito** y dejar un `.gz` parcial (~20 bytes) que
+parece un backup válido. Reproducción:
+
+```sh
+COMPOSE=/bin/false scripts/backup_db.sh   # imprime "Backup complete", código 0, gz basura
+```
+
+Esto se corrige en el PR operativo `claude/backup-restore-hardening`.
+
+## Backup — uso previsto (una vez endurecido)
 
 ```bash
 # manual
@@ -24,46 +46,26 @@ BACKUP_DIR=/srv/acp-backups RETENTION_DAYS=14 scripts/backup_db.sh
 Variables: `BACKUP_DIR` (def. `./backups`), `RETENTION_DAYS` (def. 14),
 `POSTGRES_USER` (def. `acp`), `POSTGRES_DB` (def. `access_control`), `COMPOSE`.
 
-## Restauración
+## Restore — requisitos del PR operativo (aún no implementado)
 
-Script: `scripts/restore_db.sh`. **Operación destructiva**: dropea y recrea la
-base destino, por eso exige `--force` y está pensado para un **entorno de
-verificación aislado**, no para producción a ciegas.
+El script de restore **no existe todavía como componente confiable**. El PR
+operativo debe garantizar, con pruebas automatizadas (fakes):
 
-```bash
-scripts/restore_db.sh backups/acp-20260906T020000Z.sql.gz --force
-```
+- Validar argumentos **antes** de contactar PostgreSQL.
+- `gzip -t` sobre el dump **antes** de tocar la base; rechazar dump vacío o corrupto.
+- Validación estricta de `DB_NAME`/`DB_USER`; rechazar `postgres`, `template0`, `template1`.
+- Confirmación asociada al **nombre exacto** de la base (no un `--force` genérico).
+- Propagación de errores en pipelines (`pipefail` o equivalente POSIX); nunca anunciar éxito si `gunzip`/`psql`/validación fallan.
+- Restaurar preferentemente en una **base temporal**, validar (esquema, org de prueba, revisión Alembic) y recién entonces reemplazar el destino; limpiar la temporal ante error.
+- Impedir que el backend esté reconectándose durante el reemplazo.
+- Documentar el rollback de una restauración fallida.
 
-Pasos que ejecuta:
-1. Termina las conexiones abiertas a la base destino.
-2. `DROP DATABASE IF EXISTS` + `CREATE DATABASE`.
-3. Carga el dump gunzip → `psql` con `ON_ERROR_STOP=1`.
-
-Verificación post-restore (manual):
-```bash
-docker compose exec -T db psql -U acp -d access_control -c "SELECT count(*) FROM organizations;"
-cd backend && alembic current   # confirmar que el head del esquema coincide con el código
-```
-
-## Prueba periódica (obligatoria)
-
-**Un backup no probado no es un backup.** Al menos una vez por período de
-release:
+## Prueba periódica (obligatoria una vez exista el restore)
 
 1. Levantar un entorno compose **aislado** (no producción).
-2. Restaurar el último dump con `restore_db.sh ... --force`.
+2. Restaurar el último dump.
 3. Verificar conteos, `alembic current`, y un login de humo.
 4. Registrar fecha y resultado.
 
-## Objetivos (a definir con el dueño)
-
-- **RPO / RTO:** no definidos aún. Con backup diario, el RPO por defecto es ≤24 h;
-  ajustar la frecuencia del cron según el RPO acordado.
-- **DR / failover de DB:** no implementado (sin réplica). Fuera del alcance
-  actual; documentar como riesgo operacional.
-
-## Estado
-
-- Backup: **implementado** (`scripts/backup_db.sh`), no ejercido en CI.
-- Restore: **implementado** (`scripts/restore_db.sh`), **pendiente de prueba real
-  en entorno autorizado** — no se ejecuta sin autorización del dueño (invariante #7).
+> No ejecutar restore contra producción. No se ejecuta sin autorización del
+> dueño (invariante #7).

@@ -9,13 +9,61 @@
 
 Plataforma web SaaS multi-tenant para gestionar controladoras de acceso L04/N3000 compatibles: organizaciones, usuarios, RBAC, puertas, personas, credenciales, horarios, niveles de acceso, eventos, asistencia y auditoría. Reemplaza el software de escritorio legado conservando seguridad física y trazabilidad.
 
-## Línea base (verificá siempre con git, no confíes en un hash escrito)
+## Línea base — snapshot reproducible
 
-- **Rama de trabajo:** `claude/develop` (rama de integración = **PR #7**).
-- **`main` NO contiene el trabajo actual.** Nada de Fases 1–7 está fusionado a `main`.
-- Para el commit exacto y el estado del árbol: `git log -1` y `git status --short`.
-- Modo `simulated` por defecto. La comunicación real TCP/UDP con N3000/L04 es
-  **experimental y no verificada** — ver `HARDWARE_STATUS.md`.
+> Un handoff debe decir **qué versión fue auditada** y además **cómo detectar
+> divergencia**. Este es el snapshot; abajo están los comandos para comprobarlo.
+
+- **Auditado:** 2026-09-06 13:36 UTC (2026-09-06 10:36 `America/Asuncion`).
+- **SHA del código auditado:** `b97f5e3c89d4735e272c17be705a99877accf908`.
+- **Rama del código:** `claude/develop` — **PR de integración #7**.
+- **`main`:** `beec044f9250168abb7df9322ac045e2f7bd0a40` — **NO contiene** el trabajo actual. Nada de Fases 1–7 está fusionado a `main`.
+- **Rama documental:** `claude/docs-consolidation` — **PR documental #8**.
+- **Importante:** los documentos canónicos nuevos (`IMPLEMENTATION_STATUS`, `REQUIREMENTS_TRACEABILITY`, `TEST_EVIDENCE`, `HARDWARE_STATUS`, `SECURITY`, `BACKUP_RESTORE`) **existen solo en PR #8** hasta que se integren a `claude/develop`.
+- Modo `simulated` por defecto. La comunicación real TCP/UDP con N3000/L04 es **experimental y no verificada** — ver `HARDWARE_STATUS.md`.
+
+### Estado de los PRs
+
+| PR | Rama | Estado | Nota |
+|---|---|---|---|
+| #7 | `claude/develop` | **Draft, sin fusionar** | Integración de Fases 1–7. |
+| #8 | `claude/docs-consolidation` | **Draft, sin fusionar** | Solo documentación; base `claude/develop`. |
+| #3–#6 | `claude/phase1-*`, `claude/access-control-saas-refactor-6wm329` | **Abiertos** | Contenidos en #7; se conservan como evidencia granular hasta auditar #7 (no cerrados aún). |
+
+### Comprobar el snapshot y detectar divergencia
+
+```bash
+git fetch --all --prune
+git rev-parse origin/main
+git rev-parse origin/claude/develop
+# ¿cuánto cambió el código auditado respecto de main?
+git diff --stat beec044f9250168abb7df9322ac045e2f7bd0a40..b97f5e3c89d4735e272c17be705a99877accf908
+# ¿el HEAD de develop sigue siendo el auditado?
+git rev-parse origin/claude/develop   # debería == b97f5e3... ; si difiere, el código avanzó
+```
+
+### Cómo obtener ambas ramas
+
+```bash
+git fetch origin claude/develop claude/docs-consolidation
+git checkout claude/develop            # el código
+git checkout claude/docs-consolidation # la documentación (PR #8)
+```
+
+### Orden de lectura recomendado
+
+1. Este archivo (`AI_HANDOFF.md`).
+2. `IMPLEMENTATION_STATUS.md` — qué está hecho + backlog P0–P3.
+3. `REQUIREMENTS_TRACEABILITY.md` — matriz con IDs estables y evidencia al SHA.
+4. `SECURITY.md` — controles + hallazgos + qué está `NO_VERIFICADO`.
+5. `HARDWARE_STATUS.md` — plataforma vs. placa (nada verificado en hardware).
+6. `TEST_EVIDENCE.md`, `DEPLOYMENT.md`, `GATEWAY_BRIDGE.md` según la tarea.
+
+### Primera tarea recomendada
+
+Completar la **auditoría de seguridad independiente** (endpoint-por-endpoint IDOR,
+doble aprobación bajo carrera, fuga en logs) y recién después decidir merge de #7.
+No implementar enforcement de flags de puerta ni UI de doble aprobación hasta ese informe.
 
 ## Mapa de documentación (fuente de verdad por tema)
 
