@@ -44,6 +44,13 @@ class Settings(BaseSettings):
     cookie_samesite: str = "lax"  # lax | strict | none
     cookie_domain: str | None = None
 
+    # Trusted reverse-proxy IPs whose X-Forwarded-For/Proto uvicorn will honour
+    # (passed to `uvicorn --forwarded-allow-ips`). MUST be the reverse proxy's
+    # IP(s), never "*": trusting any peer lets a client spoof its source IP,
+    # bypassing the per-IP auth rate limit and forging the IP in the audit trail
+    # and session records. Production refuses "*" (see production_issues).
+    forwarded_allow_ips: str = "127.0.0.1"
+
     # Hardware gateway: "simulated" runs an in-process L04 simulator,
     # "tcp" talks to real boards on the network.
     gateway_mode: str = "simulated"
@@ -112,6 +119,11 @@ class Settings(BaseSettings):
             issues.append("ACP_COOKIE_SECURE must be true in production (cookies over HTTPS only)")
         if self.cookie_samesite.lower() == "none" and not self.cookie_secure:
             issues.append("SameSite=None cookies require ACP_COOKIE_SECURE=true")
+        if self.forwarded_allow_ips.strip() == "*":
+            issues.append(
+                "ACP_FORWARDED_ALLOW_IPS must not be '*' in production "
+                "(set it to the reverse proxy's IP(s); '*' lets clients spoof their source IP)"
+            )
         return issues
 
     @model_validator(mode="after")
