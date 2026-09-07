@@ -69,39 +69,50 @@ git checkout claude/docs-consolidation # la documentación (PR #8)
 
 ### Primera tarea recomendada
 
-1. **Verificar en CI la prueba real de restore** (PR #9, job `backup-restore-postgres`) y revisar el PR — el P0 destructivo de restore ya fue corregido allí.
-2. Abrir los **PRs de fix de seguridad** empezando por **F-2** (`--forwarded-allow-ips *`) y **F-1** (carrera de lockout), luego F-4/F-3 (ver `SECURITY.md`).
-3. UI de doble aprobación: el backend está CONFIRMADO por la auditoría; se puede construir la UI (PR aparte).
-No implementar enforcement real de flags de puerta hasta tener hardware.
+Con #8/#9/#10 consistentes y verdes, la siguiente unidad de trabajo es la
+**cola de PRs de fix de seguridad**, cada uno en rama aislada con tests
+negativos/de concurrencia, CI verde, cuerpo y handoff actualizados, sin merge:
+1. **F-2** — eliminar `--forwarded-allow-ips *`, confiar solo en proxies conocidos.
+2. **F-1** — incremento atómico del contador de intentos fallidos (lockout).
+3. **F-4** — autenticación real por bridge además del fingerprint.
+4. **F-3** — validación de `Origin` en el WebSocket.
+5. UI completa de doble aprobación (backend CONFIRMADO por la auditoría).
+6. Revocación automática de tarjetas hacia el outbox.
+7. Redis para rate-limit y revocación multi-worker.
+8. `pip-audit` para backend.
+
+No implementar enforcement real de flags de puerta hasta tener hardware; en su
+lugar, reemplazar la constante `ADVANCED_FLAGS_ENFORCED` por capacidades
+obtenidas del backend/controladora (la UI debe fallar-cerrado si no las conoce).
 
 ## Registro de continuidad (última sesión)
 
 > Bloque que se actualiza al cerrar cada unidad de trabajo. Un agente nuevo debe
 > poder continuar leyendo esto + los PRs, sin el historial de chat.
 
-- **Fecha/hora:** 2026-09-06 ~19:30 UTC (~16:30 `America/Asuncion`).
+- **Fecha/hora:** 2026-09-07 ~00:45 UTC (2026-09-06 ~21:45 `America/Asuncion`).
 - **Repositorio:** `DaltonP93/Cerradura_magnetica`.
 - **Ramas / SHA (completo) / PR asociados:**
-  - `claude/develop` → PR **#7** (base `main`) — SHA `b97f5e3c89d4735e272c17be705a99877accf908` — código de Fases 1–7. **PR #7 en Draft (verificado por API: `draft:true`).**
+  - `claude/develop` → PR **#7** (base `main`) — SHA `b97f5e3c89d4735e272c17be705a99877accf908` — código de Fases 1–7. **Draft (verificado por API: `draft:true`).**
   - `claude/docs-consolidation` → PR **#8** (base `develop`) — documentación canónica (este commit avanza el HEAD).
-  - `claude/backup-restore-hardening` → PR **#9** (base `develop`) — SHA `df6166c85512744434b5d1199fd80a94f8d6c2fb`.
+  - `claude/backup-restore-hardening` → PR **#9** (base `develop`) — SHA `e8efcb72738b2d01b022e342112b800dc1677486`.
   - `claude/frontend-door-flags-advisory` → PR **#10** (base `develop`) — SHA `a1e993397938f6e6f1915895f11d56ef1d6997e7`.
-- **Cambios en la ronda de correcciones de la auditoría Codex:**
-  - **PR #9 (P0 restore):** restore reescrito como **swap no destructivo** (activa→recovery, temp→activa, rollback automático; nunca se dropea la activa antes de instalar el reemplazo), mutex, `ALLOW_CONNECTIONS=false` en la ventana, sin `psql | grep` (exit y valor por separado), `--drop-recovery` explícito. 22 tests fake (rename original/temp/rollback OK/rollback FATAL/smoke/concurrentes/SIGTERM/validación-exit≠0/conservación) + **test real en PostgreSQL** (`test_backup_restore_integration.py` + `scripts/ci/pg_compose_shim.sh` + job CI `backup-restore-postgres`).
-  - **PR #10 (falsa seguridad):** edición de anti-passback/first-card/multicard **deshabilitada** mientras `ADVANCED_FLAGS_ENFORCED=false`; Interlock igual en `ControllersPage`; component tests (RTL+jsdom) de `DoorsPage`/`ControllersPage`; Vite 5→7 / Vitest 2→3 → **`npm audit` 0 vulnerabilidades**; CI audita el árbol completo (`--audit-level=high`).
-  - **PR #8 (docs):** SECURITY/IMPLEMENTATION_STATUS/REQUIREMENTS_TRACEABILITY/BACKUP_RESTORE/este archivo actualizados al estado real; DA-001 = `OPEN_PR_VERIFIED` (auditoría confirmó CAS); #9/#10 reflejados como PR abiertos (no "PLANNED").
-- **Pruebas ejecutadas (reales, locales):**
-  - Backend + scripts — `test_backup_restore_scripts.py` **22 passed**, integración **2 skipped** (sin PG local); `ruff check .` limpio; `sh -n` OK.
-  - Frontend — `npm test` **7 passed**; `npm run build` (tsc + vite 7) OK; `npm audit` **0**.
-- **CI (run IDs reales; conclusión a confirmar al leer GitHub):**
-  - PR #8: run `34052867996` — **success** (último commit previo; este commit dispara uno nuevo).
-  - PR #9: run `34054465968` (head `df6166c`) — **in_progress** al registrar; incluye el job real de PostgreSQL. **No declarar verde hasta confirmar.**
-  - PR #10: run `34054721663` (head `a1e9933`) — **in_progress** al registrar. **No declarar verde hasta confirmar.**
+- **Cambios en la 2ª ronda de correcciones de la auditoría Codex:**
+  - **PR #9 (restore v2):** restore como **máquina de estados** (PREPARING→TEMP_READY→ACTIVE_RENAMED→PROMOTED→SMOKE_OK, +ROLLED_BACK/FATAL_MANUAL_RECOVERY) con **reconciliación por señal desde la verdad del servidor**, journal en el lock (PID/UTC/target/fase/temp/recovery), `--release-lock` explícito (no auto-borra lock abandonado), `--drop-recovery` bajo el mismo mutex, smoke query configurable. 26 tests fake (incl. SIGTERM pre-swap y durante la promoción, rollback fatal que conserva temp+recovery, lock abandonado fail-closed) + **PostgreSQL real en CI** (round-trip, aborto por validación, **rollback post-swap**) + **ShellCheck** en CI.
+  - **PR #10 (falsa seguridad):** edición de flags **deshabilitada** con `ADVANCED_FLAGS_ENFORCED=false`; Interlock igual en `ControllersPage`; component tests (RTL+jsdom); Vite 5→7 / Vitest 2→3 → **`npm audit` 0**; CI audita el árbol completo.
+  - **PR #8 (docs):** informe de seguridad **versionado** en `docs/audits/SECURITY_AUDIT_2026-09-06.md` (reemplaza el scratchpad); SECURITY/IMPLEMENTATION_STATUS/REQUIREMENTS_TRACEABILITY/BACKUP_RESTORE/este archivo al estado real; BACKUP-001/002 y UI-003 = `OPEN_PR_VERIFIED` (Probado en CI); se distingue **test PG descartable en CI** de **restore drill autorizado en staging**.
+- **Pruebas (reales):**
+  - Backend + scripts (rama #9) — suite completa **203 passed, 3 skipped** local; `ruff check .` limpio; `sh -n` + `shellcheck` limpios en los 3 scripts.
+  - Frontend (rama #10) — `npm test` **7 passed**; `npm run build` (vite 7) OK; `npm audit` **0**.
+- **CI (verificado por check runs):**
+  - PR #8 `2ee45ea` — **verde** (frontend/backend/backend-postgres).
+  - PR #9 `e8efcb7` — **backup-restore-postgres ✅ (PG real + ShellCheck + rollback post-swap)**, frontend ✅, backend ✅; general backend-postgres finalizando al registrar.
+  - PR #10 `a1e9933` — **verde** (frontend; backend/backend-postgres del branch también verdes).
 - **Migraciones:** ninguna nueva. `claude/develop` mantiene head único `e0f1a2b3c4d5`.
-- **Riesgos:** F-1…F-11 (0 P0, 0 P1; 5 P2, 6 P3 — `SECURITY.md`), sin PR de fix aún; backlog P1 (Redis, TLS, migraciones como job).
-- **Bloqueos:** confirmar conclusión de CI de #9/#10; prueba de restore en entorno autorizado y validación de hardware requieren autorización. Los conteos de **hilos de revisión no se consultaron** (API GraphQL con límites) — no se afirma "cero hilos".
-- **Trabajo pendiente:** confirmar CI de #9/#10; PRs de fix F-1…F-11; UI de doble aprobación; enforcement real de flags (hardware).
-- **Próxima tarea recomendada:** ver "Primera tarea recomendada" arriba (verificar CI real de restore #9; luego F-2 y F-1).
+- **Riesgos:** F-1…F-11 (0 P0, 0 P1; 5 P2, 6 P3 — `SECURITY.md` + `docs/audits/`), sin PR de fix aún; backlog P1 (Redis, TLS, migraciones como job, pip-audit).
+- **Bloqueos:** el **restore drill en staging** y la validación de hardware requieren autorización. Conteos de **hilos de revisión no consultados** (GraphQL con límites) — no se afirma "cero hilos".
+- **Trabajo pendiente:** cola de PRs de fix (F-2, F-1, F-4, F-3, UI doble aprobación, revocación→outbox, Redis, pip-audit).
+- **Próxima tarea recomendada:** ver "Primera tarea recomendada" (empezar por F-2 y F-1).
 
 ## Diferenciación de estado (obligatoria; no declarar "terminado" a la ligera)
 

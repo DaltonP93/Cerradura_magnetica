@@ -109,7 +109,7 @@ auditoría (con 2 matices: F-2 y F-6).
 > Prioridad de PRs sugerida por la auditoría: **F-2 y F-1** primero (habilitan
 > fuerza bruta combinada), luego F-4 y F-3, luego F-5 (disponibilidad), y los P3
 > como higiene. **Ninguno se corrige en el PR documental (#8);** cada uno va en su
-> propia rama con tests. Informe completo: `scratchpad/audit4_security_independent.md`.
+> propia rama con tests. **Informe completo versionado:** [`docs/audits/SECURITY_AUDIT_2026-09-06.md`](audits/SECURITY_AUDIT_2026-09-06.md).
 
 ## Riesgos abiertos priorizados (operacionales / funcionales)
 

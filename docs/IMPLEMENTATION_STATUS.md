@@ -76,7 +76,7 @@
 |---|---|---|---|
 | P0-1 | **Falsa seguridad de flags mitigada en UI** (enforcement real sigue pendiente) | La UI ya NO presenta anti-passback/interlock/multicard/first-card como activos: badges "no aplicado", banner y **edición deshabilitada** (`ADVANCED_FLAGS_ENFORCED=false`). El **enforcement en el motor** sigue pendiente (requiere hardware). Estado: **PR #10 abierto** (mitigación UI); enforcement `PLANNED`. | `frontend/lib/doorFlags.ts`, `DoorsPage.tsx`, `ControllersPage.tsx` |
 | P0-2 | **UI de doble aprobación** | El backend (CONFIRMADO por auditoría) rechaza (409) la apertura de puertas críticas y el SPA no ofrece forma de completar el flujo → puerta crítica inoperable desde la interfaz. Estado: `PLANNED` (pendiente). | `frontend/src/api/index.ts`, nueva página |
-| P0-3 | **Backup/restore endurecido + probado** | ✅ **Corregido en PR #9 (abierto):** backup ya no oculta fallos de `pg_dump`; restore con swap **no destructivo** + rollback + mutex; 22 tests fake + test real en PostgreSQL en CI. Estado: **PR #9 abierto**, pendiente de confirmar CI real y prueba en entorno autorizado. | `scripts/`, `BACKUP_RESTORE.md` |
+| P0-3 | **Backup/restore endurecido + probado** | ✅ **Corregido en PR #9 (abierto):** restore como **máquina de estados** con swap no destructivo, reconciliación por señal desde la verdad del servidor, journal en el lock, `--release-lock`/`--drop-recovery` explícitos; 26 tests fake + **prueba real en PostgreSQL en CI verde** (round-trip, aborto por validación, rollback post-swap) + ShellCheck. Estado: **PR #9 abierto**, `Probado en CI`. Falta el **restore drill autorizado en staging** (distinto del test de CI descartable). | `scripts/`, `BACKUP_RESTORE.md` |
 
 ### P1 — Robustez / operación
 
