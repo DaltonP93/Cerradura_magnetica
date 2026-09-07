@@ -216,11 +216,14 @@ def open_door(
 
     if command_dispatch.bridge_mode():
         # Queue the pulse for the local bridge; the physical open (and its
-        # REMOTE_OPEN event) is recorded when the board reports back.
+        # REMOTE_OPEN event) is recorded when the board reports back. F-11: an
+        # optional client Idempotency-Key collapses a double-submit onto the
+        # same queued command (no double pulse).
         command = command_dispatch.enqueue_command(
             db, organization_id=org_id, controller_id=controller_id,
             type=GatewayCommandType.OPEN_DOOR,
             payload={"door": door.number, "door_id": door_id_val, "requested_by_id": actor_id},
+            idempotency_key=request.headers.get("Idempotency-Key"),
         )
         record_audit(db, user=actor, action="command:open_door", resource_type="door",
                      resource_id=door_id_val, request=request, organization_id=org_id,
