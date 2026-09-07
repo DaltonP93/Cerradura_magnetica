@@ -95,7 +95,7 @@ auditoría (con 2 matices: F-2 y F-6).
 | ID | Sev | Hallazgo | Archivo:función | Corrección mínima |
 |---|---|---|---|---|
 | F-1 | P2 | Carrera lost-update en el lockout (`+=1` read-modify-write no atómico) debilita anti-fuerza-bruta | `api/v1/auth.py::login` | `UPDATE ... failed_login_count = failed_login_count + 1` atómico o `with_for_update` |
-| F-2 | P2 | `--forwarded-allow-ips *`: confía en `X-Forwarded-For` de cualquier peer → bypass rate-limit por IP + IP falsificable en auditoría/sesión | `backend/Dockerfile`; `core/ratelimit.py`, `services/audit.py`, `services/sessions.py` | Restringir a la IP del reverse proxy; nunca `*` |
+| F-2 | P2 | `--forwarded-allow-ips *`: confía en `X-Forwarded-For` de cualquier peer → bypass rate-limit por IP + IP falsificable en auditoría/sesión | `backend/Dockerfile`; `core/ratelimit.py`, `services/audit.py`, `services/sessions.py` | ✅ **PR #11 (abierto):** `forwarded_allow_ips` configurable (default `127.0.0.1`), producción rechaza `*` (fail-fast); Dockerfile/compose sin `*` literal |
 | F-3 | P2 | WebSocket sin verificación de `Origin` → CSWSH si `ACP_COOKIE_SAMESITE=none` | `api/v1/ws.py::events_ws` | Validar `Origin` contra `cors_origin_list` en el handshake por cookie |
 | F-4 | P2 | Confianza ciega en el header de fingerprint del bridge (no es secreto) → suplantación si el edge no strippea el header | `api/v1/gateway_bridge.py::get_current_bridge` | Secreto por-bridge (token emitido al registrar, hasheado) además del fingerprint |
 | F-5 | P2 | MFA sin códigos de recuperación ni reset por admin → lockout permanente ante pérdida del TOTP | `api/v1/auth.py`, `schemas/auth.py` (UserUpdate sin campos mfa) | Recovery codes de un uso (hasheados) y/o endpoint de reset admin auditado |

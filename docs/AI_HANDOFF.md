@@ -30,6 +30,7 @@ Plataforma web SaaS multi-tenant para gestionar controladoras de acceso L04/N300
 | #8 | `claude/docs-consolidation` | `claude/develop` | Draft, sin fusionar | Documentación canónica (este archivo y los demás docs de estado). |
 | #9 | `claude/backup-restore-hardening` | `claude/develop` | Draft, sin fusionar | Endurecimiento de backup/restore + 12 tests. |
 | #10 | `claude/frontend-door-flags-advisory` | `claude/develop` | Draft, sin fusionar | Flags de puerta "no aplicado/experimental" + infra Vitest. |
+| #11 | `claude/sec-f2-forwarded-allow-ips` | `claude/develop` | Draft, sin fusionar | **F-2**: sin `--forwarded-allow-ips *`; prod rechaza `*` (fail-fast). |
 | #3–#6 | `claude/phase1-*`, `claude/access-control-saas-refactor-6wm329` | `main` | Abiertos | Contenidos en #7 (verificado por `git merge-base`); se conservan como evidencia granular; no cerrados. |
 
 > **Protocolo de continuidad:** GitHub es la única fuente de verdad. Toda unidad
@@ -111,8 +112,9 @@ obtenidas del backend/controladora (la UI debe fallar-cerrado si no las conoce).
 - **Migraciones:** ninguna nueva. `claude/develop` mantiene head único `e0f1a2b3c4d5`.
 - **Riesgos:** F-1…F-11 (0 P0, 0 P1; 5 P2, 6 P3 — `SECURITY.md` + `docs/audits/`), sin PR de fix aún; backlog P1 (Redis, TLS, migraciones como job, pip-audit).
 - **Bloqueos:** el **restore drill en staging** y la validación de hardware requieren autorización. Conteos de **hilos de revisión no consultados** (GraphQL con límites) — no se afirma "cero hilos".
-- **Trabajo pendiente:** cola de PRs de fix (F-2, F-1, F-4, F-3, UI doble aprobación, revocación→outbox, Redis, pip-audit).
-- **Próxima tarea recomendada:** ver "Primera tarea recomendada" (empezar por F-2 y F-1).
+- **PR #11 (F-2, abierto):** eliminado `--forwarded-allow-ips *`; `forwarded_allow_ips` configurable (default `127.0.0.1`), producción **rechaza `*`** (fail-fast); Dockerfile/compose/.env actualizados; 4 tests negativos (`test_production_safety.py` 12 passed); `ruff` limpio.
+- **Trabajo pendiente:** cola de PRs de fix — **próximo F-1** (incremento atómico del contador de lockout), luego F-4, F-3, UI doble aprobación, revocación→outbox, Redis, pip-audit.
+- **Próxima tarea recomendada:** **F-1** en rama aislada con test de concurrencia; luego F-4/F-3.
 
 ## Diferenciación de estado (obligatoria; no declarar "terminado" a la ligera)
 
