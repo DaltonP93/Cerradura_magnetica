@@ -32,6 +32,7 @@ Plataforma web SaaS multi-tenant para gestionar controladoras de acceso L04/N300
 | #10 | `claude/frontend-door-flags-advisory` | `claude/develop` | Draft, sin fusionar | Flags de puerta "no aplicado/experimental" + infra Vitest. |
 | #11 | `claude/sec-f2-forwarded-allow-ips` | `claude/develop` | Draft, sin fusionar | **F-2**: sin `--forwarded-allow-ips *`; prod rechaza `*` (fail-fast). |
 | #12 | `claude/sec-f1-atomic-lockout` | `claude/develop` | Draft, sin fusionar | **F-1**: incremento atómico del contador de lockout (sin lost updates). |
+| #13 | `claude/sec-f4-bridge-secret` | `claude/develop` | Draft, sin fusionar | **F-4**: secreto por-puente además del fingerprint mTLS (fail-closed). |
 | #3–#6 | `claude/phase1-*`, `claude/access-control-saas-refactor-6wm329` | `main` | Abiertos | Contenidos en #7 (verificado por `git merge-base`); se conservan como evidencia granular; no cerrados. |
 
 > **Protocolo de continuidad:** GitHub es la única fuente de verdad. Toda unidad
@@ -115,8 +116,9 @@ obtenidas del backend/controladora (la UI debe fallar-cerrado si no las conoce).
 - **Bloqueos:** el **restore drill en staging** y la validación de hardware requieren autorización. Conteos de **hilos de revisión no consultados** (GraphQL con límites) — no se afirma "cero hilos".
 - **PR #11 (F-2, abierto):** eliminado `--forwarded-allow-ips *`; `forwarded_allow_ips` configurable (default `127.0.0.1`), producción **rechaza `*`** (fail-fast); Dockerfile/compose/.env actualizados; 4 tests negativos (`test_production_safety.py` 12 passed). **CI verde (verificado: backend/backend-postgres/frontend).**
 - **PR #12 (F-1, abierto):** contador de intentos fallidos con **incremento atómico** (`UPDATE ... failed_login_count + 1 RETURNING`), lockout al umbral en UPDATE atómico + auditoría; ambos caminos (contraseña y MFA) usan el helper. Tests: DB-authoritative + concurrencia (K bumps → K, sin lost updates); suite **179 passed** local. **CI verde (verificado, incl. concurrencia en PostgreSQL real).**
-- **Trabajo pendiente:** cola de PRs de fix — **próximo F-4** (secreto por-bridge además del fingerprint), luego F-3 (Origin WS), UI doble aprobación, revocación→outbox, Redis, pip-audit.
-- **Próxima tarea recomendada:** **F-4** en rama aislada con tests; luego F-3.
+- **PR #13 (F-4, abierto):** SHA `c38bc1d`. La huella mTLS por sí sola ya no autentica: cada puente presenta además un **secreto compartido por-puente** (header configurable `X-Bridge-Secret`), verificado en **tiempo constante** (`secrets.compare_digest` sobre digest SHA-256) contra `GatewayBridge.secret_hash`. Registro genera el secreto (`token_urlsafe(32)`), guarda solo el hash y lo devuelve **una vez** (`GatewayBridgeCreated.secret`). `secret_hash` NULL **no autentica** (fail-closed). Migración `f1a2b3c4d5e6` (padre `e0f1a2b3c4d5`, head único; round-trip up/down/up limpio). Tests nuevos (sin secreto→401, secreto erróneo→401, sin `secret_hash`→401, registro devuelve secreto que autentica y uno erróneo no) + fixtures/tests existentes presentan el secreto. **Probado localmente: 181 passed; `ruff` limpio.** CI: frontend ✅ (verificado); backend/backend-postgres **en curso al registrar** (a confirmar por check runs).
+- **Trabajo pendiente:** cola de PRs de fix — **próximo F-3** (validación de `Origin` en el WebSocket), luego UI doble aprobación, revocación→outbox, Redis, pip-audit.
+- **Próxima tarea recomendada:** **F-3** en rama aislada con tests negativos; luego UI doble aprobación.
 
 ## Diferenciación de estado (obligatoria; no declarar "terminado" a la ligera)
 
