@@ -103,9 +103,44 @@ def test_backup_then_restore_round_trip(tmp_path, dbname):
     assert psql(dbname, "SELECT count(*) FROM organizations;") == "1"
     assert psql(dbname, "SELECT name FROM organizations;") == "acme"
     # The previous DB is preserved as a recovery database.
-    recoveries = psql("postgres",
-                      "SELECT count(*) FROM pg_database WHERE datname LIKE '" + dbname + "_recovery_%';")
-    assert recoveries == "1"
+    recovery = psql("postgres",
+                    "SELECT datname FROM pg_database WHERE datname LIKE '" + dbname + "_recovery_%';")
+    assert recovery.startswith(f"{dbname}_recovery_")
+    # Explicit, separate deletion of the recovery database works on real PG.
+    d = run(RESTORE, ["--drop-recovery", recovery, "--confirm", recovery], dbname)
+    assert d.returncode == 0, d.stdout + d.stderr
+    assert psql("postgres",
+                "SELECT count(*) FROM pg_database WHERE datname='" + recovery + "';") == "0"
+
+
+def test_post_swap_rollback_restores_previous_on_real_pg(tmp_path, dbname):
+    """Real-PG post-swap rollback: an injected smoke failure after promotion
+    rolls back to the previous database; the active DB is never lost."""
+    bdir = tmp_path / "backups"
+    env = _env(dbname)
+    env["BACKUP_DIR"] = str(bdir)
+    b = subprocess.run(["sh", str(BACKUP)], capture_output=True, text=True, env=env,
+                       stdin=subprocess.DEVNULL)
+    assert b.returncode == 0, b.stdout + b.stderr
+    dump = next(iter(bdir.glob("acp-*.sql.gz")))
+
+    # Mark the live DB so we can prove it survived the failed restore.
+    psql(dbname, "INSERT INTO organizations (name) VALUES ('live_before_restore');")
+    before = psql(dbname, "SELECT count(*) FROM organizations;")
+
+    # Force the post-swap smoke test to fail (isolated, safe injection).
+    env2 = _env(dbname)
+    env2["RESTORE_SMOKE_SQL"] = "SELECT false;"
+    r = subprocess.run(["sh", str(RESTORE), str(dump), "--confirm", dbname],
+                       capture_output=True, text=True, env=env2, stdin=subprocess.DEVNULL)
+    assert r.returncode == 10, r.stdout + r.stderr
+    # Rolled back: the live DB is intact (still has the marker row).
+    assert psql(dbname, "SELECT count(*) FROM organizations;") == before
+    assert psql(dbname, "SELECT count(*) FROM organizations WHERE name='live_before_restore';") == "1"
+    # The suspect restore is preserved as a *_failed_* database for inspection.
+    failed = psql("postgres",
+                  "SELECT count(*) FROM pg_database WHERE datname LIKE '" + dbname + "_failed_%';")
+    assert failed == "1"
 
 
 def test_failed_validation_leaves_live_db_untouched(tmp_path, dbname):

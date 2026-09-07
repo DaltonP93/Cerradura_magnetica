@@ -104,8 +104,16 @@ jobs:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: backend/requirements-dev.txt
-      - name: Install PostgreSQL client (psql + pg_dump)
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: Install PostgreSQL client (psql + pg_dump) and ShellCheck
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client shellcheck
+      - name: Lint shell scripts (sh -n + ShellCheck)
+        working-directory: .
+        run: |
+          for f in scripts/*.sh scripts/ci/*.sh; do
+            echo "== $f =="
+            sh -n "$f"
+            shellcheck "$f"
+          done
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
       - name: Real backup/restore end-to-end test
