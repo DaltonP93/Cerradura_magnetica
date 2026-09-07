@@ -17,6 +17,8 @@ import type {
   Department,
   DepartmentInput,
   Door,
+  DoorOpenRequest,
+  DoorOpenRequestStatus,
   DoorUpdate,
   EventType,
   Holiday,
@@ -109,6 +111,15 @@ export const doorsApi = {
     api.get<Page<Door>>('/doors', { params }).then((r) => r.data),
   update: (id: number, body: DoorUpdate) => api.patch<Door>(`/doors/${id}`, body).then((r) => r.data),
   open: (id: number) => api.post<CommandResult>(`/doors/${id}/open`).then((r) => r.data),
+  // Two-person rule (dual approval) for critical doors.
+  requestOpen: (id: number, reason?: string | null) =>
+    api.post<DoorOpenRequest>(`/doors/${id}/open-requests`, { reason: reason ?? null }).then((r) => r.data),
+  listOpenRequests: (params?: { status?: DoorOpenRequestStatus; limit?: number; offset?: number }) =>
+    api.get<Page<DoorOpenRequest>>('/doors/open-requests', { params }).then((r) => r.data),
+  approveOpenRequest: (id: number) =>
+    api.post<DoorOpenRequest>(`/doors/open-requests/${id}/approve`).then((r) => r.data),
+  rejectOpenRequest: (id: number) =>
+    api.post<DoorOpenRequest>(`/doors/open-requests/${id}/reject`).then((r) => r.data),
 };
 
 // ---- departments ----

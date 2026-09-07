@@ -85,5 +85,7 @@ jobs:
         run: npm ci
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
+      - name: Unit/component tests (vitest)
+        run: npm test
       - name: Build (typecheck + bundle)
         run: npm run build

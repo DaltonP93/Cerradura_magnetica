@@ -32,6 +32,7 @@ interface DoorForm {
   anti_passback: boolean;
   first_card_open: boolean;
   multi_card_count: string;
+  requires_dual_approval: boolean;
 }
 
 export function DoorsPage() {
@@ -73,6 +74,7 @@ export function DoorsPage() {
       anti_passback: door.anti_passback,
       first_card_open: door.first_card_open,
       multi_card_count: String(door.multi_card_count),
+      requires_dual_approval: door.requires_dual_approval,
     });
     setFormError(null);
   };
@@ -92,6 +94,7 @@ export function DoorsPage() {
         anti_passback: form.anti_passback,
         first_card_open: form.first_card_open,
         multi_card_count: Number(form.multi_card_count),
+        requires_dual_approval: form.requires_dual_approval,
       });
       toast.success('Puerta actualizada');
       setEditing(null);
@@ -109,6 +112,20 @@ export function DoorsPage() {
       const result = await doorsApi.open(door.id);
       if (result.success) toast.success(`${door.name}: ${result.message}`);
       else toast.error(`${door.name}: ${result.message}`);
+    } catch (err) {
+      toast.error(apiErrorMessage(err));
+    } finally {
+      setOpeningId(null);
+    }
+  };
+
+  // Critical doors cannot be opened directly; they require the two-person
+  // request/approve workflow (see the Aprobaciones page).
+  const handleRequestOpen = async (door: Door) => {
+    setOpeningId(door.id);
+    try {
+      await doorsApi.requestOpen(door.id);
+      toast.success(`${door.name}: solicitud creada; requiere una segunda aprobación en Aprobaciones.`);
     } catch (err) {
       toast.error(apiErrorMessage(err));
     } finally {
@@ -138,6 +155,7 @@ export function DoorsPage() {
           {d.anti_passback && <Badge tone="slate">Anti-passback</Badge>}
           {d.first_card_open && <Badge tone="slate">1ª tarjeta</Badge>}
           {d.multi_card_count > 1 && <Badge tone="slate">{d.multi_card_count} tarjetas</Badge>}
+          {d.requires_dual_approval && <Badge tone="amber">Doble aprobación</Badge>}
         </div>
       ),
     },
@@ -146,15 +164,24 @@ export function DoorsPage() {
       className: 'whitespace-nowrap',
       render: (d) => (
         <div className="flex flex-wrap gap-1.5">
-          {isOperator && (
-            <button
-              className="inline-flex items-center gap-1 rounded-md bg-emerald-600/90 px-2.5 py-1.5 text-xs font-medium text-white transition hover:bg-emerald-500 disabled:opacity-50"
-              disabled={openingId !== null}
-              onClick={() => void handleOpen(d)}
-            >
-              {openingId === d.id ? <Spinner className="h-3 w-3" /> : '🔓'} Abrir puerta
-            </button>
-          )}
+          {isOperator &&
+            (d.requires_dual_approval ? (
+              <button
+                className="inline-flex items-center gap-1 rounded-md bg-amber-600/90 px-2.5 py-1.5 text-xs font-medium text-white transition hover:bg-amber-500 disabled:opacity-50"
+                disabled={openingId !== null}
+                onClick={() => void handleRequestOpen(d)}
+              >
+                {openingId === d.id ? <Spinner className="h-3 w-3" /> : '🔐'} Solicitar apertura
+              </button>
+            ) : (
+              <button
+                className="inline-flex items-center gap-1 rounded-md bg-emerald-600/90 px-2.5 py-1.5 text-xs font-medium text-white transition hover:bg-emerald-500 disabled:opacity-50"
+                disabled={openingId !== null}
+                onClick={() => void handleOpen(d)}
+              >
+                {openingId === d.id ? <Spinner className="h-3 w-3" /> : '🔓'} Abrir puerta
+              </button>
+            ))}
           {isAdmin && (
             <button className={BTN_SMALL} onClick={() => openEdit(d)}>
               ✏️ Editar
@@ -266,6 +293,11 @@ export function DoorsPage() {
                 label="Apertura con primera tarjeta"
                 checked={form.first_card_open}
                 onChange={(v) => setForm({ ...form, first_card_open: v })}
+              />
+              <Checkbox
+                label="Requiere doble aprobación (regla de dos personas)"
+                checked={form.requires_dual_approval}
+                onChange={(v) => setForm({ ...form, requires_dual_approval: v })}
               />
             </div>
             <FormField
