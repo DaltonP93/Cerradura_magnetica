@@ -8,8 +8,34 @@
 >   (no fijamos un hash aquí para que no envejezca).
 > - **Base:** `main` (`beec044`) **no** contiene este trabajo. Todo vive en la
 >   rama de integración = **PR #7**. Nada está fusionado a `main`.
-> - **Evidencia de tests:** `pytest tests -q` → **177 passed** (verificado en la
->   auditoría). Ver `TEST_EVIDENCE.md`.
+> - **Evidencia de tests:** `pytest tests -q` → **177 passed** en el SHA auditado.
+>   Ver `TEST_EVIDENCE.md`.
+>
+> ---
+> ### 🔄 Actualización 2026-09-07 — cola de fixes #11–#20 (todos Draft, CI verde, sin fusionar)
+>
+> Este documento es el **snapshot de la auditoría** (`b97f5e3`). Desde entonces se
+> abrió una cola de PRs de corrección/endurecimiento, **todos verificados en CI y
+> sin fusionar** (el continuity log de `AI_HANDOFF.md` es la fuente viva). Deltas:
+>
+> | PR | Cierra | Antes → Ahora |
+> |---|---|---|
+> | #11 | **F-2** | `--forwarded-allow-ips *` → configurable, prod rechaza `*` (fail-fast) |
+> | #12 | **F-1** | lockout `+=1` no atómico → `UPDATE ... +1 RETURNING` + test de concurrencia |
+> | #13 | **F-4** | fingerprint del bridge sin secreto → secreto por-puente hasheado (fail-closed) + migración |
+> | #14 | **F-3** | WS sin `Origin` → validación anti-CSWSH |
+> | #15 | **P1-6 / R-4** | sin SCA Python → `pip-audit` en CI + `cryptography` sin vulnerabilidades |
+> | #16 | **P2-3 / R-2** | revocación no propagada a placa → `REVOKE_CARD` al outbox por controladora (modo bridge) |
+> | #17 | **P1-1 / R-1 (rate-limit)** | rate-limit in-memory → `RedisRateLimiter` cross-worker opt-in (fallback in-memory) |
+> | #18 | **P0-2 / DOOR-005 / UI-002-dual** | sin UI de doble aprobación → página Aprobaciones + toggle en el editor + infra Vitest |
+> | #19 | **P1-1 / R-1 (revocación)** | revocación WS intra-proceso → fan-out Redis Pub/Sub opt-in (revalidación BD sigue de red) |
+> | #20 | **P1-2** | migraciones en el arranque del backend → servicio one-shot `migrate` en compose |
+>
+> **Aún pendientes** tras esta cola: F-5, F-6, F-7, F-8, F-9, F-10, F-11 (seguridad
+> P2/P3, sin PR); enforcement real de flags (P0-1, requiere hardware); UI de MFA
+> (P1-4); turnos nocturnos (P1-5); y todo lo `BLOCKED_HARDWARE`/`BLOCKED_SPEC`.
+> Ver la sección final **"Camino a operativo 100%"**.
+> ---
 
 ## Taxonomía de estados
 
@@ -54,11 +80,11 @@
 
 **Incompleto (ver backlog abajo):**
 
-- Flags avanzados de puerta: solo se guardan/exhiben, **ningún motor los aplica**.
-- Doble aprobación: backend completo, **sin UI** en el SPA; el flag ni siquiera es seteable desde la interfaz.
-- MFA/TOTP: backend completo, **sin pantallas** en el SPA.
-- Turnos nocturnos (que cruzan medianoche): **no soportados**.
-- Revocación de credencial/persona: surte efecto online, **no se propaga automáticamente a la placa**.
+- Flags avanzados de puerta: solo se guardan/exhiben, **ningún motor los aplica** (mitigado en UI por #10; enforcement requiere hardware).
+- Doble aprobación: ✅ **UI completada en PR #18** (página Aprobaciones + toggle en el editor de puerta). Backend ya estaba.
+- MFA/TOTP: backend completo, **sin pantallas** en el SPA (P1-4).
+- Turnos nocturnos (que cruzan medianoche): **no soportados** (P1-5).
+- Revocación de credencial/persona: efecto online + ✅ **propagación automática a la placa vía outbox en modo bridge (PR #16)**; el efecto físico depende de hardware.
 - Dry-run de importación: soportado en backend, el SPA importa directo.
 - Export CSV de reportes: client-side, limitado a las filas paginadas cargadas.
 - i18n: inexistente; strings en español hardcodeados.
@@ -75,19 +101,19 @@
 | # | Ítem | Por qué | Dónde |
 |---|---|---|---|
 | P0-1 | **Falsa seguridad de flags mitigada en UI** (enforcement real sigue pendiente) | La UI ya NO presenta anti-passback/interlock/multicard/first-card como activos: badges "no aplicado", banner y **edición deshabilitada** (`ADVANCED_FLAGS_ENFORCED=false`). El **enforcement en el motor** sigue pendiente (requiere hardware). Estado: **PR #10 abierto** (mitigación UI); enforcement `PLANNED`. | `frontend/lib/doorFlags.ts`, `DoorsPage.tsx`, `ControllersPage.tsx` |
-| P0-2 | **UI de doble aprobación** | El backend (CONFIRMADO por auditoría) rechaza (409) la apertura de puertas críticas y el SPA no ofrece forma de completar el flujo → puerta crítica inoperable desde la interfaz. Estado: `PLANNED` (pendiente). | `frontend/src/api/index.ts`, nueva página |
+| P0-2 | **UI de doble aprobación** | ✅ **RESUELTO — PR #18 (abierto, CI verde):** página **Aprobaciones** (solicitar/aprobar/rechazar, regla de dos personas en UI), toggle "requiere doble aprobación" en el editor de puerta, y "Solicitar apertura" en puertas críticas + infra Vitest (5 component tests). | `frontend/src/pages/ApprovalsPage.tsx`, `DoorsPage.tsx`, `api/index.ts` |
 | P0-3 | **Backup/restore endurecido + probado** | ✅ **Corregido en PR #9 (abierto):** restore como **máquina de estados** con swap no destructivo, reconciliación por señal desde la verdad del servidor, journal en el lock, `--release-lock`/`--drop-recovery` explícitos; 26 tests fake + **prueba real en PostgreSQL en CI verde** (round-trip, aborto por validación, rollback post-swap) + ShellCheck. Estado: **PR #9 abierto**, `Probado en CI`. Falta el **restore drill autorizado en staging** (distinto del test de CI descartable). | `scripts/`, `BACKUP_RESTORE.md` |
 
 ### P1 — Robustez / operación
 
 | # | Ítem | Por qué |
 |---|---|---|
-| P1-1 | **Redis para rate-limit, fan-out de revocación WS y métricas** | Hoy todo es en memoria por-proceso → fuerza un solo worker; escalar rompe el límite de auth y la revocación inmediata. |
-| P1-2 | **Migraciones como job previo (no en arranque) para réplicas** | `alembic upgrade head` corre en el arranque del backend; con réplicas = carrera. |
-| P1-3 | **TLS cableado en el borde** | `nginx.tls.conf` existe pero es manual; sin HTTPS real el login con `cookie_secure=true` queda inutilizable. |
-| P1-4 | **UI de MFA/TOTP** | Backend completo sin pantallas para activar/usar. |
-| P1-5 | **Turnos nocturnos en asistencia** | Modelo `Shift` sin flag overnight; un turno 22:00→06:00 parte el par entrada/salida. |
-| P1-6 | **pip-audit en CI backend** | El frontend audita deps; Python no tiene SCA. |
+| P1-1 | **Redis para rate-limit, fan-out de revocación WS y métricas** | ✅ **RESUELTO (rate-limit + revocación) — PR #17 y #19 (abiertos, CI verde):** `RedisRateLimiter` cross-worker opt-in + `revocation_bus` (Pub/Sub) opt-in por `ACP_REDIS_URL`, con fallback in-memory. *Métricas por-worker siguen como caveat (P2-6).* |
+| P1-2 | **Migraciones como job previo (no en arranque) para réplicas** | ✅ **RESUELTO — PR #20 (abierto, CI verde):** servicio one-shot `migrate` en compose; backend `depends_on: service_completed_successfully`. |
+| P1-3 | **TLS cableado en el borde** | Implementado (`frontend/nginx.tls.conf`) y documentado (`DEPLOYMENT.md`); su activación (montar cert + reemplazar config) es un paso operativo del despliegue. |
+| P1-4 | **UI de MFA/TOTP** | ⏳ Pendiente. Backend completo sin pantallas para activar/usar. |
+| P1-5 | **Turnos nocturnos en asistencia** | ⏳ Pendiente. Modelo `Shift` sin flag overnight; un turno 22:00→06:00 parte el par entrada/salida. |
+| P1-6 | **pip-audit en CI backend** | ✅ **RESUELTO — PR #15 (abierto, CI verde):** `pip-audit -r requirements.txt` en el job backend + `cryptography` sin vulnerabilidades. |
 
 ### P2 — Completitud funcional
 
@@ -95,7 +121,7 @@
 |---|---|
 | P2-1 | Dry-run de importación en el SPA |
 | P2-2 | Export CSV server-side de reportes (no solo filas paginadas) |
-| P2-3 | Propagación de revocaciones a la placa (baja explícita hacia el puente) |
+| P2-3 | ✅ **RESUELTO — PR #16:** propagación de revocaciones a la placa (`REVOKE_CARD` al outbox por controladora en modo bridge; efecto físico depende de hardware) |
 | P2-4 | Downgrade de migraciones ejercido en CI (upgrade→downgrade→upgrade) |
 | P2-5 | Healthchecks de compose para backend/frontend + `condition: service_healthy` |
 | P2-6 | Alertas mínimas sobre métricas (readiness 503, 5xx, lockouts, latencia) |
@@ -126,11 +152,80 @@
 | #8 | `claude/docs-consolidation` | `claude/develop` | Draft. Documentación canónica (este doc y los demás de estado). |
 | #9 | `claude/backup-restore-hardening` | `claude/develop` | Draft. Backup/restore endurecido + tests (fakes + PG real en CI). |
 | #10 | `claude/frontend-door-flags-advisory` | `claude/develop` | Draft. Flags "no aplicado" + edición deshabilitada + infra de tests. |
+| #11 | `claude/sec-f2-forwarded-allow-ips` | `claude/develop` | Draft, CI verde. **F-2**. |
+| #12 | `claude/sec-f1-atomic-lockout` | `claude/develop` | Draft, CI verde. **F-1**. |
+| #13 | `claude/sec-f4-bridge-secret` | `claude/develop` | Draft, CI verde. **F-4** (+ migración `f1a2b3c4d5e6`). |
+| #14 | `claude/sec-f3-ws-origin` | `claude/develop` | Draft, CI verde. **F-3**. |
+| #15 | `claude/sec-pip-audit` | `claude/develop` | Draft, CI verde. **pip-audit** + `cryptography`. |
+| #16 | `claude/sec-card-revocation-outbox` | `claude/develop` | Draft, CI verde. **REVOKE_CARD → outbox** (+ migración `d1e2f3a4b5c6`). |
+| #17 | `claude/sec-redis-ratelimit` | `claude/develop` | Draft, CI verde. **Redis rate-limit** opt-in. |
+| #18 | `claude/frontend-dual-approval` | `claude/develop` | Draft, CI verde. **UI doble aprobación** + Vitest. |
+| #19 | `claude/sec-redis-revocation-bus` | `claude/sec-redis-ratelimit` (#17) | Draft, CI verde. **Redis Pub/Sub revocación** (apilado en #17). |
+| #20 | `claude/deploy-hardening` | `claude/develop` | Draft, CI verde. **Migraciones como job** en compose. |
 | #3–#6 | `claude/phase1-*`, `claude/access-control-saas-refactor-6wm329` | `main` | Abiertos, contenidos en #7 (verificado por `git merge-base`); **no cerrados**. |
+
+> **Solapes a reconciliar al integrar** (cada PR es lineal por sí mismo; el
+> conflicto solo aparece al fusionar varios a `develop`): migraciones apiladas
+> #13 (`f1a2b3c4d5e6`) y #16 (`d1e2f3a4b5c6`) cuelgan ambas de `e0f1a2b3c4d5`
+> → re-encadenar una; infra frontend/CI #10 y #18 (versión de Vite/Vitest, pasos
+> de CI); apilado Redis #17 → #19; y el `command:` de compose #11 (F-2) + #20
+> (job de migración).
 
 ## Hallazgos de seguridad pendientes (de PRs de fix separados)
 
 La auditoría independiente arrojó **0 P0, 0 P1, 5 P2, 6 P3** (F-1…F-11 en `SECURITY.md`).
-Ninguno tiene aún PR de corrección; prioridad sugerida: **F-2** (`--forwarded-allow-ips *`) y **F-1** (carrera de lockout), luego F-4/F-3, luego F-5.
+**Corregidos (PRs abiertos, CI verde):** F-1 (#12), F-2 (#11), F-3 (#14), F-4 (#13).
+**Pendientes (sin PR):** F-5 (MFA recovery/reset — P2), F-6 (nº de tarjeta en claro en errores del importador — P3), F-7 (`/metrics` abierto + compare no constante — P3), F-8 (enumeración de usuarios/tenants — P3), F-9 (`get_or_404` IDOR latente — P3), F-10 (inbox: IntegrityError por-fila — P3), F-11 (apertura remota no idempotente por `Idempotency-Key` — P3).
 
 Ver `AI_HANDOFF.md` para el índice maestro y `REQUIREMENTS_TRACEABILITY.md` para la matriz completa de requisitos.
+
+## Camino a operativo 100%
+
+> Qué falta, exactamente, para declarar el sistema **100% operativo y funcional**
+> — según el proyecto solicitado **y** la auditoría funcional. Ordenado por peso.
+> `[ ]` pendiente · `[~]` hecho a nivel software (en PR Draft, falta integrar/validar).
+
+### A. Bloqueantes duros (sin esto no es "operativo")
+- [ ] **Integración y despliegue.** Nada está en `main`; todo son PRs Draft. Integrar
+      #7 + fixes #9–#20 a `claude/develop` (reconciliando los solapes de arriba),
+      correr la suite sobre el árbol integrado, y luego a `main`. **Requiere
+      autorización explícita para fusionar.**
+- [ ] **Validación contra hardware real (N3000/L04).** Es el mayor faltante para un
+      control de acceso *físico*. Hoy **NADA** está verificado en placa
+      (`HARDWARE_STATUS.md`): confirmar el wire protocol real, ajustar el adaptador
+      detrás de `ControllerGateway`, validar no-destructivo con autorización. Sin
+      esto, abrir/validar puertas solo funciona en `simulated`.
+
+### B. Enforcement de flags avanzados (ligado a B-hardware)
+- [ ] **anti-passback / interlock / multicard / first-card-open aplicados.** Hoy solo
+      se persisten/muestran (mitigado en UI por #10). Reemplazar la constante
+      `ADVANCED_FLAGS_ENFORCED` por **capacidades reales** del backend/controladora
+      (UI fail-closed si no las conoce) e implementar el enforcement — requiere hardware.
+
+### C. Funcionalidad de producto faltante
+- [~] UI de doble aprobación — **PR #18** (falta integrar).
+- [~] Propagación de revocación a la placa — **PR #16** (falta integrar; efecto físico depende de hardware).
+- [ ] **UI de MFA/TOTP** (P1-4): activar/usar/deshabilitar desde el SPA + (F-5) recovery codes / reset por admin.
+- [ ] **Turnos nocturnos** en asistencia (P1-5).
+- [ ] Dry-run de importación en el SPA (P2-1); export CSV server-side completo (P2-2).
+- [ ] i18n (P3-4); tests **E2E** de frontend (P3-5).
+
+### D. Seguridad restante (auditoría F-1…F-11)
+- [~] F-1/F-2/F-3/F-4 — PRs #12/#11/#14/#13 (falta integrar).
+- [ ] **F-5** (P2): MFA recovery codes / reset admin.
+- [ ] **F-6, F-7, F-8, F-9, F-10, F-11** (P3): higiene (ver `SECURITY.md`).
+- [ ] Re-verificar los requisitos aún `OPEN_PR_UNVERIFIED` (AUTH-003 CSRF/fallback WS, AUTH-004) tras integrar los fixes.
+
+### E. Operación / despliegue
+- [~] Redis rate-limit (#17) + revocación (#19); migraciones-como-job (#20); TLS implementado/documentado (falta integrar/activar).
+- [ ] **Restore drill autorizado en staging** (distinto del test descartable de CI) — `BACKUP_RESTORE.md`.
+- [ ] Provisión de secretos reales; healthchecks de compose backend/frontend (P2-5); alertas sobre métricas (P2-6); métricas cross-worker; escaneo de imágenes (P3-2); CD (P3-6).
+
+### F. Cierre documental / auditoría
+- [~] Este doc, `SECURITY.md`, `REQUIREMENTS_TRACEABILITY.md`, `HARDWARE_STATUS.md` actualizados a la cola #11–#20 (2026-09-07).
+- [ ] Rehacer la matriz de trazabilidad **al SHA integrado** una vez fusionado a `develop`, y correr la auditoría independiente sobre ese árbol final.
+
+> **Veredicto honesto:** la **plataforma web (SaaS)** está funcionalmente
+> completa y probada en CI, pero **en PRs sin fusionar**. Como **control de acceso
+> físico**, está **bloqueada por hardware**. No es 100% operativo hasta cerrar A
+> (integración + hardware) como mínimo; B–F son para completitud plena del producto.

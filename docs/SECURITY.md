@@ -12,6 +12,14 @@
 > ítems `NO_VERIFICADO` de la primera tanda: IDOR endpoint-por-endpoint, doble
 > aprobación bajo carrera y fuga en logs fueron verificados.
 
+> **🔄 Actualización 2026-09-07 — cola de fixes (Draft, CI verde, sin fusionar).**
+> Corregidos: **F-1** (#12), **F-2** (#11), **F-3** (#14), **F-4** (#13). Riesgos
+> operacionales cerrados a nivel software: **R-1** rate-limit + revocación WS →
+> Redis opt-in (#17 rate-limit, #19 Pub/Sub revocación); **R-2** revocación→placa
+> (#16); **R-4** pip-audit (#15); migraciones-como-job (#20). Pendientes sin PR:
+> **F-5** (P2) y **F-6…F-11** (P3); enforcement de flags (R-3, requiere hardware);
+> UI de MFA. Ver `IMPLEMENTATION_STATUS.md` §"Camino a operativo 100%".
+
 ## Invariantes (única sede canónica; el resto de docs enlaza aquí)
 
 1. No abrir/cerrar/configurar/sincronizar una puerta o controladora real sin autorización humana explícita.
@@ -58,20 +66,20 @@
 | Falta CSRF | **RESUELTO** | Middleware double-submit (`csrf.py`); `test_cookie_auth`. |
 | Falta rate-limiting | **RESUELTO (con caveat multi-worker)** | `ratelimit.py`; es **en memoria por-proceso** → ver riesgo abierto R-1. |
 | Falta MFA | **RESUELTO (backend) / PARCIAL (sin UI)** | Backend `totp.py`; sin pantallas en el SPA. |
-| Falta Redis pub/sub | **ABIERTO** | No existe Redis; fan-out de revocación y rate-limit son por-proceso. Ver R-1. |
+| Falta Redis pub/sub | **RESUELTO (opt-in) / PR #17+#19** | `RedisRateLimiter` (#17) y `revocation_bus` Pub/Sub (#19) activables por `ACP_REDIS_URL`, con fallback in-memory. Métricas siguen por-worker. Ver R-1. |
 | Falta doble aprobación | **RESUELTO (backend) / PARCIAL (sin UI)** | `dual_approval.py`; sin UI para completar el flujo. |
 | Sesiones activas tras suspensión de org | **RESUELTO** | `organizations.py:69-85` + `deps.py:43-44` cortan sesión y WS. |
-| Revocaciones no sincronizadas con la placa | **ABIERTO** | `cardholders.py` no encola ni llama al gateway al revocar; el push es manual y simulado. Ver R-2. |
-| Flags de puerta (anti-passback/interlock/multicard/first-card) solo almacenados | **ABIERTO** | Sin enforcement en `access_engine.py`. Ver R-3. |
+| Revocaciones no sincronizadas con la placa | **RESUELTO / PR #16** | Al desactivar/eliminar una credencial se encola `REVOKE_CARD` por controladora en el outbox (modo bridge); efecto físico depende de hardware. Ver R-2. |
+| Flags de puerta (anti-passback/interlock/multicard/first-card) solo almacenados | **ABIERTO (mitigado en UI por #10)** | Sin enforcement en `access_engine.py`; la UI ya los marca "no aplicado" y deshabilita su edición. Enforcement real requiere hardware. Ver R-3. |
 
 ## Riesgos abiertos priorizados
 
 | ID | Riesgo | Severidad | Impacto | Mitigación propuesta |
 |---|---|---|---|---|
-| R-1 | Rate-limit, revocación WS y métricas **en memoria por-proceso** | Alta (operacional) | Escalar a >1 worker rompe el límite de auth y demora la revocación al `ws_revalidate_seconds` | Introducir Redis (store + pub/sub) antes de multi-worker; hoy: **mandar un solo worker** |
-| R-2 | Revocaciones **no propagadas a la placa** | Alta (seguridad física) | Una credencial revocada sigue válida en la memoria de la placa hasta un sync manual | Encolar baja en el outbox al revocar; sincronización automática |
-| R-3 | Flags avanzados de puerta **sin enforcement** | Alta (falsa seguridad) | La UI sugiere protección (anti-passback, interlock) que no existe | Implementar en el motor o marcar explícitamente "no aplicado" en la UI |
-| R-4 | Sin **pip-audit** en backend | Media | Vulnerabilidades de deps Python sin detectar | Agregar `pip-audit` al job de CI |
+| R-1 | Rate-limit, revocación WS y métricas **en memoria por-proceso** | Alta (operacional) → **mitigado (opt-in)** | Escalar a >1 worker rompía el límite de auth y demoraba la revocación al `ws_revalidate_seconds` | ✅ **Redis opt-in por `ACP_REDIS_URL`:** rate-limit cross-worker (#17) + fan-out de revocación Pub/Sub (#19). **Métricas** siguen por-worker (P2-6). Sin Redis: seguir con un solo worker. |
+| R-2 | Revocaciones **no propagadas a la placa** | Alta (seguridad física) → **mitigado** | Una credencial revocada seguía válida en la memoria de la placa hasta un sync manual | ✅ **PR #16:** `REVOKE_CARD` al outbox por controladora al revocar (modo bridge); efecto físico depende de hardware. |
+| R-3 | Flags avanzados de puerta **sin enforcement** | Alta (falsa seguridad) → **mitigado en UI** | La UI sugería protección (anti-passback, interlock) inexistente | ✅ UI mitigada (#10: "no aplicado" + edición deshabilitada). **Enforcement real pendiente (requiere hardware);** reemplazar `ADVANCED_FLAGS_ENFORCED` por capacidades del backend/controladora. |
+| R-4 | Sin **pip-audit** en backend | Media → **resuelto** | Vulnerabilidades de deps Python sin detectar | ✅ **PR #15:** `pip-audit -r requirements.txt` en el job backend + `cryptography>=50.0.1` sin avisos. |
 | R-5 | `/metrics` abierto si no se setea `ACP_METRICS_TOKEN` | Media | Exposición de métricas internas | Exigir token o restringir en el borde en prod |
 | R-6 | Sin restore probado de la DB | Media (operacional) | Backup no verificable | Ver `BACKUP_RESTORE.md` (P0-3) |
 
@@ -115,8 +123,8 @@ auditoría (con 2 matices: F-2 y F-6).
 
 | ID | Riesgo | Severidad | Impacto | Mitigación propuesta |
 |---|---|---|---|---|
-| R-1 | Rate-limit, revocación WS y métricas **en memoria por-proceso** | Alta (operacional) | Escalar a >1 worker rompe el límite de auth y demora la revocación al `ws_revalidate_seconds` | Introducir Redis (store + pub/sub) antes de multi-worker; hoy: **mandar un solo worker** |
-| R-2 | Revocaciones **no propagadas a la placa** | Alta (seguridad física) | Una credencial revocada sigue válida en la memoria de la placa hasta un sync manual | Encolar baja en el outbox al revocar; sincronización automática |
-| R-3 | Flags avanzados de puerta **sin enforcement** | Alta (falsa seguridad) | La UI sugiere protección (anti-passback, interlock) que no existe | Marcar "no aplicado/experimental" en la UI (PR frontend en curso) o implementar en el motor |
-| R-4 | Sin **pip-audit** en backend | Media | Vulnerabilidades de deps Python sin detectar | Agregar `pip-audit` al job de CI |
+| R-1 | Rate-limit, revocación WS y métricas **en memoria por-proceso** | Alta (operacional) → **mitigado (opt-in)** | Escalar a >1 worker rompía el límite de auth y demoraba la revocación al `ws_revalidate_seconds` | ✅ **Redis opt-in por `ACP_REDIS_URL`:** rate-limit cross-worker (#17) + fan-out de revocación Pub/Sub (#19). **Métricas** siguen por-worker (P2-6). Sin Redis: seguir con un solo worker. |
+| R-2 | Revocaciones **no propagadas a la placa** | Alta (seguridad física) → **mitigado** | Una credencial revocada seguía válida en la memoria de la placa hasta un sync manual | ✅ **PR #16:** `REVOKE_CARD` al outbox por controladora al revocar (modo bridge); efecto físico depende de hardware. |
+| R-3 | Flags avanzados de puerta **sin enforcement** | Alta (falsa seguridad) → **mitigado en UI** | La UI sugería protección inexistente | ✅ UI mitigada (#10). Enforcement real pendiente (requiere hardware). |
+| R-4 | Sin **pip-audit** en backend | Media → **resuelto** | Vulnerabilidades de deps Python sin detectar | ✅ **PR #15:** `pip-audit -r requirements.txt` en el job backend + `cryptography>=50.0.1` sin avisos. |
 | R-5 | Backup ocultaba fallos + sin restore probado | Media (operacional) | Backup no confiable/verificable | Endurecido en PR #9 (falta prueba real autorizada) |

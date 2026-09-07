@@ -7,6 +7,12 @@
 >
 > **Resumen en una línea: NADA está verificado contra hardware real.** Todo lo
 > físico es simulado o experimental.
+>
+> **🔄 Nota 2026-09-07:** la cola de fixes #11–#20 (seguridad/operación) **no
+> cambia** este estado — sigue sin haber validación en placa. Sí refuerza el
+> contrato del puente: auth con **secreto por-puente además del fingerprint**
+> (F-4, #13) y **revocación de tarjetas al outbox** (#16). El productor físico real
+> y el wire protocol siguen `BLOCKED_HARDWARE`/`BLOCKED_SPEC`.
 
 ## Regla de oro (invariante del proyecto)
 
@@ -24,7 +30,7 @@ compatibilidad. Un test verde del codec **no** prueba compatibilidad con la plac
 | Tarjeta 64-bit / virtual card number | ✅ | ❌ | `OPEN_PR_VERIFIED` (plataforma) | Basado en datasheets de lectora (`HARDWARE.md`), no en placa |
 | Driver `l04_udp` (modo `tcp`) | ✅ (experimental) | ❌ | `BLOCKED_HARDWARE` | Layout público UHPPOTE-compatible; **no** verificado contra N3000 |
 | Puente local: outbox/claim/ack | ✅ | ❌ | `OPEN_PR_VERIFIED` (contrato) | `gateway_outbox.py`; el daemon puente real es externo |
-| Puente: auth por fingerprint mTLS | ✅ | ❌ | `OPEN_PR_VERIFIED` (contrato) | `gateway_bridge.py`; verificación de cert en el borde |
+| Puente: auth por fingerprint mTLS **+ secreto por-puente** | ✅ | ❌ | `OPEN_PR_VERIFIED` (contrato) | `gateway_bridge.py`; verificación de cert en el borde + secreto hasheado (F-4, #13, fail-closed) |
 | Inbox de eventos de placa | ✅ (endpoint) | ❌ | `BLOCKED_HARDWARE` | `gateway_inbox.py`; falta el productor físico real |
 | Flags avanzados de puerta | ⚠️ solo persistencia | ❌ | `PARTIAL` | Sin enforcement en el motor |
 | Alta por lector USB WG1028 | ❌ | ❌ | `PLANNED` | Requiere hardware en el puesto |

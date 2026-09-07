@@ -12,6 +12,19 @@
 >
 > Convención de capa: **[P]** plataforma · **[S]** simulador · **[H]** hardware real.
 
+> **🔄 Actualización 2026-09-07 — deltas por la cola de fixes #11–#20 (Draft, CI verde, sin fusionar).**
+> Las filas de abajo están ancladas al SHA auditado `b97f5e3`; estos PRs aún **no
+> están en `develop`**, así que la matriz se **rehará al SHA integrado** cuando se
+> fusionen. Deltas a nivel requisito:
+> - **AUTH-004** (rate-limit + lockout): F-1 lockout ahora atómico (**#12**); límite por IP cross-worker con Redis opt-in (**#17**). Carrera de lockout cerrada.
+> - **AUTH-005 / UI-002** (MFA): sigue **PARTIAL** (backend ok, **sin UI**); F-5 (recovery/reset) pendiente.
+> - **AUTH-001 / TENANT-002** ("Faltante: multi-worker"): cubierto por Redis Pub/Sub de revocación (**#19**) + rate-limit (**#17**), opt-in.
+> - **DOOR-004** (flags aplicados): sigue `PARTIAL`; UI mitigada (#10), enforcement pendiente (hardware).
+> - **DOOR-005** (`requires_dual_approval` + flujo): ✅ **UI completada (#18)** — toggle en el editor + página Aprobaciones.
+> - **AUTH-003 (WS Origin/CSWSH):** F-3 añadido (**#14**). **Bridge auth:** secreto por-puente (F-4, **#13**).
+> - **Credenciales**: revocación se propaga al outbox (**#16**). **Importador (F-6)** y **`get_or_404` (F-9)**: pendientes.
+> Detalle y estado global en `IMPLEMENTATION_STATUS.md` §"Camino a operativo 100%".
+
 ## Multi-tenant
 
 | ID | Área | Requisito | Estado | Evidencia (@`b97f5e3`) | PR/commit | Tests | Faltante | Criterio de aceptación |
@@ -26,7 +39,7 @@
 | AUTH-001 | Auth [P] | Sesiones server-side + refresh rotativo + detección de reuso full-history | `OPEN_PR_VERIFIED` | `backend/app/models/auth_session.py`, `backend/app/services/sessions.py` | #7 | `test_sessions.py` (22) | Certificación multi-worker (Redis) | Replay de cualquier generación revoca la familia |
 | AUTH-002 | Auth [P] | Binding sesión ↔ `sub` del JWT (`session.user_id` == JWT sub) | `OPEN_PR_VERIFIED` | `backend/app/core/deps.py`, `backend/app/api/v1/ws.py` (`get_active_session(db, session_id, subject)`); `rotate_refresh` rechaza si `user_id != expected`. **Auditoría independiente: CONFIRMADO.** | #7 | `test_sessions.py` | — | Un token cuyo `sub` no coincide con la sesión es rechazado |
 | AUTH-003 | Auth [P] | Cookies HttpOnly/Secure/SameSite + CSRF double-submit; sin JWT en localStorage/URL | `OPEN_PR_UNVERIFIED` | `backend/app/core/cookies.py`, `backend/app/core/csrf.py`, `frontend/src/api/client.ts` | #7 | `test_cookie_auth.py` (8) | Revisión CSRF/fallback WS por seguridad | CSRF rechaza sin token doble; WS autentica por cookie |
-| AUTH-004 | Auth [P] | Rate-limit + lockout de cuenta por fuerza bruta | `OPEN_PR_UNVERIFIED` | `backend/app/core/ratelimit.py`, `users.locked_until` | #7 | `test_login_protection.py` (5) | Comportamiento multi-worker + carrera de lockout | Tras N fallos la cuenta se bloquea; límite por IP |
+| AUTH-004 | Auth [P] | Rate-limit + lockout de cuenta por fuerza bruta | `OPEN_PR_VERIFIED` (con fixes #12/#17) | `backend/app/core/ratelimit.py`, `users.locked_until`; **F-1 atómico (#12)**, **Redis opt-in (#17)** | #7, #12, #17 | `test_login_protection.py` (+concurrencia), `test_redis_ratelimit.py` | Re-verificación independiente tras integrar | Tras N fallos la cuenta se bloquea; límite por IP; sin lost-update en el contador |
 | AUTH-005 | Auth [P] | MFA TOTP (setup/enable/disable) | `PARTIAL` | Backend `backend/app/api/v1/auth.py`, `backend/app/core/totp.py`; **sin UI** | #7 | `test_mfa.py` (5) | UI (UI-002); códigos de recuperación (revisar) | Admin activa/usa TOTP desde el SPA |
 
 ## RBAC / permisos
@@ -55,7 +68,7 @@
 | DOOR-002 | Puertas [S] | Consola Check/Adjust Time/Upload | `SIMULATED_ONLY` | `backend/app/api/v1/controllers.py`, `backend/app/services/gateway/simulated.py` | #7 | `test_infrastructure.py` | Adaptador real [H] | Sobre `simulated` responde OK |
 | DOOR-003 | Puertas [S] | Apertura remota con evento + auditoría | `SIMULATED_ONLY` | `backend/app/api/v1/doors.py` | #7 | `test_infrastructure.py` | Apertura física [H] | Genera evento/auditoría; no abre físicamente |
 | DOOR-004 | Puertas [P] | Flags avanzados (anti-passback/interlock/multicard/first-card) **aplicados** | `PARTIAL` (solo persistencia) | `backend/app/models/infrastructure.py`, `backend/app/schemas/infrastructure.py`; **cero refs en `access_engine.py`** | #7 | — | Enforcement (P0-1); mientras tanto marcarlos "no aplicado" en UI (UI-003) | El motor aplica cada flag con estado en tiempo real |
-| DOOR-005 | Puertas [P] | `requires_dual_approval` configurable por puerta | `PARTIAL` | Backend `backend/app/api/v1/doors.py`; UI no expone toggle | #7 | `test_dual_approval.py` | Toggle en UI | Marcar puerta crítica desde la interfaz |
+| DOOR-005 | Puertas [P] | `requires_dual_approval` configurable por puerta + flujo completo | `OPEN_PR_VERIFIED` (con UI #18) | Backend `backend/app/api/v1/doors.py`; **UI: toggle en el editor + página Aprobaciones (#18)** | #7, #18 | `test_dual_approval.py` (10), `ApprovalsPage.test.tsx` (5) | Integrar #18 | Marcar puerta crítica y completar aprobación desde la interfaz |
 
 ## Horarios / feriados
 
