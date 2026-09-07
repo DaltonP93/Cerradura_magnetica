@@ -175,7 +175,8 @@
 
 La auditoría independiente arrojó **0 P0, 0 P1, 5 P2, 6 P3** (F-1…F-11 en `SECURITY.md`).
 **Corregidos (PRs abiertos, CI verde):** F-1 (#12), F-2 (#11), F-3 (#14), F-4 (#13).
-**Pendientes (sin PR):** F-5 (MFA recovery/reset — P2), F-6 (nº de tarjeta en claro en errores del importador — P3), F-7 (`/metrics` abierto + compare no constante — P3), F-8 (enumeración de usuarios/tenants — P3), F-9 (`get_or_404` IDOR latente — P3), F-10 (inbox: IntegrityError por-fila — P3), F-11 (apertura remota no idempotente por `Idempotency-Key` — P3).
+**Corregidos (2ª tanda, PRs abiertos):** F-6 (#21).
+**Pendientes (sin PR):** F-5 (MFA recovery/reset — P2), F-7 (`/metrics` abierto + compare no constante — P3), F-8 (enumeración de usuarios/tenants — P3), F-9 (`get_or_404` IDOR latente — P3), F-10 (inbox: IntegrityError por-fila — P3), F-11 (apertura remota no idempotente por `Idempotency-Key` — P3).
 
 Ver `AI_HANDOFF.md` para el índice maestro y `REQUIREMENTS_TRACEABILITY.md` para la matriz completa de requisitos.
 
