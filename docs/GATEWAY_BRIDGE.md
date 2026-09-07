@@ -64,6 +64,26 @@ propio certificado; revocarlo o desactivar el puente corta su acceso.
 > falsificar la identidad. El nombre del header es `ACP_BRIDGE_CERT_HEADER`
 > (default `X-Client-Cert-Fingerprint`).
 
+### Secreto por-puente (F-4, defensa en profundidad)
+
+La huella mTLS **por sí sola no autentica**. Además de la huella, el puente
+presenta un **secreto compartido por-puente** en el header `ACP_BRIDGE_SECRET_HEADER`
+(default `X-Bridge-Secret`). La API lo verifica en **tiempo constante** contra un
+hash SHA-256 almacenado; el secreto en claro nunca se persiste.
+
+- El secreto se **genera al registrar** el puente y se devuelve **una sola vez**
+  en la respuesta del alta (campo `secret`). Si se pierde, hay que re-registrar
+  el puente (rotar).
+- Un puente **sin hash de secreto** (`secret_hash` NULL) **no puede autenticar**
+  (fail-closed): filas heredadas quedan inutilizables hasta rotarse.
+- Esto protege ante una huella falsificada/reenviada: sin el secreto, la huella
+  no basta para arrendar comandos ni reportar eventos.
+
+> El secreto es un token de alta entropía (`secrets.token_urlsafe(32)`), por lo
+> que se almacena como digest SHA-256 (igual que los tokens de sesión/refresh) y
+> se compara con `secrets.compare_digest`, sin necesidad de un hash lento de
+> contraseña.
+
 Ejemplo de Nginx (borde con verificación de cliente):
 
 ```nginx

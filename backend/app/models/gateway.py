@@ -78,5 +78,10 @@ class GatewayBridge(Base, TimestampMixin, OrgScopedMixin):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     # Normalized (lowercase, no separators) SHA-256 fingerprint of the client cert.
     cert_fingerprint: Mapped[str] = mapped_column(String(128), nullable=False)
+    # F-4: SHA-256 digest of a per-bridge shared secret, presented in addition to
+    # the mTLS fingerprint (defense in depth). Only the hash is stored; the plain
+    # secret is returned once at registration. A NULL hash cannot authenticate
+    # (fail-closed): such a bridge must be rotated to obtain a secret.
+    secret_hash: Mapped[str | None] = mapped_column(String(64))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
