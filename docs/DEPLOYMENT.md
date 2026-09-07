@@ -94,7 +94,13 @@ ventana y sus sockets:
 
 ## Migraciones
 
-`alembic upgrade head` se ejecuta al arrancar el backend en compose. Con varias
-réplicas, ejecutar las migraciones como un paso **previo** y único del
-despliegue (job dedicado), no en el arranque de cada réplica, para evitar
-carreras. La cadena Alembic es lineal (un solo head).
+Las migraciones corren como un **job dedicado y de una sola vez**: el servicio
+`migrate` de compose ejecuta `alembic upgrade head` hasta completar, y el
+backend arranca solo después (`depends_on: migrate → service_completed_successfully`).
+Así el esquema se aplica **una vez** como paso explícito del despliegue, no en el
+arranque de cada réplica del backend (lo que provocaría carreras al escalar). La
+cadena Alembic es lineal (un solo head).
+
+En orquestadores sin este `depends_on` (p. ej. Kubernetes), replicar el patrón:
+correr `alembic upgrade head` como un *init job*/Job previo al rollout de los
+pods del backend. El backend ya **no** ejecuta migraciones en su arranque.
