@@ -66,12 +66,33 @@ def _still_live(session_id: str, user_id: int) -> bool:
         db.close()
 
 
+def _origin_allowed(origin: str | None) -> bool:
+    """F-3: guard against Cross-Site WebSocket Hijacking (CSWSH).
+
+    WebSocket handshakes are not covered by the Same-Origin Policy or CORS, yet
+    the browser still attaches the HttpOnly auth cookie — so a malicious page
+    could open this socket and read the victim's live event stream. Browsers
+    always send an ``Origin`` header on the WS handshake, so we require it to be
+    an allowed app origin. A missing ``Origin`` means a non-browser client (no
+    ambient cookie credential, so not a CSWSH vector) and is allowed; those
+    clients authenticate with an explicit token.
+    """
+    if origin is None:
+        return True
+    return origin in settings.cors_origin_list
+
+
 @router.websocket("/ws/events")
 async def events_ws(
     websocket: WebSocket,
     token: str | None = Query(default=None),
     organization_id: int | None = Query(default=None),
 ):
+    # F-3: reject cross-origin handshakes before doing any auth work. Stops a
+    # malicious page from opening this cookie-authenticated socket (CSWSH).
+    if not _origin_allowed(websocket.headers.get("origin")):
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
     # Browsers authenticate the socket via the HttpOnly access cookie sent in
     # the handshake, so the token no longer needs to travel in the URL. A query
     # token is still accepted for non-browser clients.

@@ -22,6 +22,16 @@ class GatewayBridgeOut(ORMModel):
     created_at: datetime
 
 
+class GatewayBridgeCreated(GatewayBridgeOut):
+    """Registration response — carries the plaintext secret exactly once.
+
+    The server stores only the hash, so the secret cannot be recovered later; if
+    it is lost the bridge must be re-registered (or its secret rotated).
+    """
+
+    secret: str
+
+
 # --- Commands (bridge-facing) ---
 class GatewayCommandOut(ORMModel):
     id: int
