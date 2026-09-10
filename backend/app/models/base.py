@@ -62,6 +62,7 @@ class GatewayCommandType(str, enum.Enum):
     OPEN_DOOR = "open_door"
     SYNC_TIME = "sync_time"
     SYNC_PERMISSIONS = "sync_permissions"
+    REVOKE_CARD = "revoke_card"  # drop a single card from a board's offline cache
 
 
 class GatewayCommandStatus(str, enum.Enum):

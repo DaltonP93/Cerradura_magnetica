@@ -4,6 +4,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api.helpers import get_or_404, paginate
 from app.core.deps import DbSession, OrgId, require_roles
+from app.core.masking import mask_card
 from app.models import AccessLevel, Cardholder, Credential, Department, Shift, User, UserRole
 from app.schemas.common import Message, Page
 from app.schemas.people import (
@@ -15,6 +16,7 @@ from app.schemas.people import (
     CredentialUpdate,
     ImportResult,
 )
+from app.services import command_dispatch
 from app.services.audit import record_audit
 from app.services.importer import import_cardholders_csv
 from app.services.legacy_mdb import MdbToolsNotAvailable, import_mdb
@@ -234,10 +236,21 @@ def update_credential(
     credential = get_or_404(db, Credential, credential_id, org_id)
     if credential.cardholder_id != cardholder_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Credential not found")
+    was_active = credential.is_active
+    card_number = credential.card_number
     for field, value in body.model_dump(exclude_unset=True).items():
         setattr(credential, field, value)
+    # Deactivating a card (e.g. reported lost) must reach the offline board
+    # caches, not just this DB row — auto-enqueue the revocation in bridge mode.
+    revoked = was_active and not credential.is_active
+    queued = (
+        command_dispatch.revoke_card_from_boards(db, organization_id=org_id, card_number=card_number)
+        if revoked else []
+    )
     record_audit(db, user=actor, action="update", resource_type="credential",
-                 resource_id=credential.id, request=request, organization_id=org_id)
+                 resource_id=credential.id, request=request, organization_id=org_id,
+                 details={"card": mask_card(card_number), "revocation_queued": len(queued)}
+                 if revoked else None)
     db.commit()
     return credential
 
@@ -250,8 +263,14 @@ def delete_credential(
     credential = get_or_404(db, Credential, credential_id, org_id)
     if credential.cardholder_id != cardholder_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Credential not found")
+    card_number = credential.card_number
     db.delete(credential)
+    db.flush()
+    # Deleting a credential is a definitive revocation: drop the card from every
+    # board's offline cache (bridge mode). Removing an absent card is a no-op.
+    queued = command_dispatch.revoke_card_from_boards(db, organization_id=org_id, card_number=card_number)
     record_audit(db, user=actor, action="delete", resource_type="credential",
-                 resource_id=credential_id, request=request, organization_id=org_id)
+                 resource_id=credential_id, request=request, organization_id=org_id,
+                 details={"card": mask_card(card_number), "revocation_queued": len(queued)})
     db.commit()
     return Message(detail="Credential deleted")
