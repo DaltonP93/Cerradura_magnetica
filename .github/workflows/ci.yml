@@ -138,6 +138,9 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - name: Install dependencies
         run: npm ci
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+      - name: Unit/component tests (vitest)
       - name: Audit dependencies (whole tree, incl. dev/tooling)
         # Fails on any high/critical advisory anywhere in the tree — dev/CI
         # included. Do not add an ignore/exception without documenting why.
