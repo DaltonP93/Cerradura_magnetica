@@ -51,7 +51,11 @@ Usuarios demo creados por el seed:
 | Admin organización | `demo-admin@example.com` | `demo1234` |
 | Operador | `demo-operator@example.com` | `demo1234` |
 
-> Cambiar estas credenciales en producción (variables `ACP_FIRST_SUPERUSER_*`).
+> Estas cuentas demo se crean solo en desarrollo. Para producción, poné
+> `ACP_ENVIRONMENT=production`: el backend **se niega a arrancar** con la
+> `ACP_SECRET_KEY` por defecto (o de menos de 32 caracteres), con la contraseña
+> de superadmin por defecto o con `ACP_DEBUG` activo, y el seed demo no se
+> ejecuta. Aprovisioná cuentas reales en su lugar.
 
 ## Desarrollo local
 

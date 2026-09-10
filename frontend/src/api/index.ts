@@ -43,11 +43,13 @@ import type {
 } from '../types';
 
 // ---- auth ----
+// Login/refresh set HttpOnly cookies server-side; the returned token body is
+// ignored by the SPA (kept in the type for programmatic clients).
 export const authApi = {
   login: (email: string, password: string) =>
     api.post<TokenPair>('/auth/login', { email, password }).then((r) => r.data),
-  refresh: (refresh_token: string) =>
-    api.post<TokenPair>('/auth/refresh', { refresh_token }).then((r) => r.data),
+  refresh: () => api.post<TokenPair>('/auth/refresh', {}).then((r) => r.data),
+  logout: () => api.post<{ detail: string }>('/auth/logout').then((r) => r.data),
   me: () => api.get<User>('/auth/me').then((r) => r.data),
   changePassword: (current_password: string, new_password: string) =>
     api.post<{ detail: string }>('/auth/change-password', { current_password, new_password }).then((r) => r.data),

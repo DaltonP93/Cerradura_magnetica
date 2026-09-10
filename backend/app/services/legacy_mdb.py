@@ -56,11 +56,13 @@ def _table_score(headers: set[str]) -> int:
 
 
 def import_mdb(
-    db: Session, organization_id: int, mdb_path: str, run: Runner | None = None
+    db: Session, organization_id: int, mdb_path: str, run: Runner | None = None,
+    *, dry_run: bool = False,
 ) -> tuple[ImportSummary, str]:
     """Find the consumer table in the .mdb and import it.
 
     Returns (summary, source_table). Raises ValueError if no table fits.
+    A dry run validates the detected table without persisting anything.
     """
     tables = list_tables(mdb_path, run)
     if not tables:
@@ -81,4 +83,4 @@ def import_mdb(
             "No table with consumer columns (Name + CardID) found. "
             f"Tables in file: {', '.join(tables[:20])}"
         )
-    return import_cardholders_csv(db, organization_id, best[2]), best[1]
+    return import_cardholders_csv(db, organization_id, best[2], dry_run=dry_run), best[1]

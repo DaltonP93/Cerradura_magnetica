@@ -9,6 +9,7 @@ from app.schemas.common import ORMModel
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
+    mfa_code: str | None = Field(default=None, max_length=10)
 
 
 class TokenPair(BaseModel):
@@ -18,7 +19,9 @@ class TokenPair(BaseModel):
 
 
 class RefreshRequest(BaseModel):
-    refresh_token: str
+    # Optional: browser clients carry the refresh token in an HttpOnly cookie,
+    # so the body may be empty. Programmatic clients may still send it here.
+    refresh_token: str | None = None
 
 
 class UserOut(ORMModel):
@@ -28,8 +31,23 @@ class UserOut(ORMModel):
     full_name: str
     role: UserRole
     is_active: bool
+    mfa_enabled: bool
     last_login_at: datetime | None
     created_at: datetime
+
+
+class MfaSetupResponse(BaseModel):
+    secret: str
+    provisioning_uri: str
+
+
+class MfaVerifyRequest(BaseModel):
+    code: str = Field(min_length=6, max_length=10)
+
+
+class MfaDisableRequest(BaseModel):
+    password: str
+    code: str = Field(min_length=6, max_length=10)
 
 
 class UserCreate(BaseModel):

@@ -11,6 +11,7 @@ from app.api.v1 import (
     departments,
     doors,
     events,
+    gateway_bridge,
     organizations,
     schedules,
     sites,
@@ -33,5 +34,6 @@ api_router.include_router(attendance.router)
 api_router.include_router(events.router)
 api_router.include_router(dashboard.router)
 api_router.include_router(audit.router)
+api_router.include_router(gateway_bridge.router)
 
 ws_router = ws.router

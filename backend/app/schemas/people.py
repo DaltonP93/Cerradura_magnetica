@@ -46,9 +46,16 @@ class CredentialUpdate(BaseModel):
 
 
 class ImportResult(BaseModel):
-    """Result of a bulk CSV import (manual section 5.3)."""
+    """Result of a staged bulk import (manual section 5.3).
 
+    On a dry run ``created`` is 0 and ``valid`` reports what would be created.
+    """
+
+    dry_run: bool = False
     created: int
+    valid: int = 0
+    skipped: int = 0
+    new_departments: list[str] = []
     errors: list[dict]
 
 

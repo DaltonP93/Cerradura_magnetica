@@ -16,6 +16,10 @@ import { useFetch } from '../lib/useFetch';
 import type { LiveEvent, SwipeResult } from '../types';
 
 const MAX_FEED = 200;
+// Bound reconnection so a revoked session (server closes with 1008) or a
+// persistently unreachable server does not spin forever.
+const MAX_WS_RETRIES = 8;
+const WS_POLICY_VIOLATION = 1008;
 
 type WsStatus = 'connecting' | 'connected' | 'disconnected';
 
@@ -66,9 +70,15 @@ function useLiveEvents() {
         // ignore malformed frames
       }
     };
-    ws.onclose = () => {
+    ws.onclose = (ev: CloseEvent) => {
       if (closedRef.current) return;
       setStatus('disconnected');
+      // A policy violation means the session is no longer valid (revoked,
+      // suspended); reconnecting would just be closed again. Give up quietly —
+      // the next authenticated API call will trigger the login redirect.
+      if (ev.code === WS_POLICY_VIOLATION || retryRef.current >= MAX_WS_RETRIES) {
+        return;
+      }
       const delay = Math.min(30000, 1000 * 2 ** retryRef.current);
       retryRef.current += 1;
       timerRef.current = window.setTimeout(connect, delay);

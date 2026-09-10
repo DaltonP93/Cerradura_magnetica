@@ -129,38 +129,51 @@ def delete_cardholder(
     return Message(detail="Cardholder deleted")
 
 
+def _import_result(summary) -> ImportResult:
+    return ImportResult(
+        dry_run=summary.dry_run, created=summary.created, valid=summary.valid,
+        skipped=summary.skipped, new_departments=summary.new_departments, errors=summary.errors,
+    )
+
+
 @router.post("/import", response_model=ImportResult)
 async def import_cardholders(
-    file: UploadFile, db: DbSession, org_id: OrgId, request: Request, actor: User = Operator
+    file: UploadFile, db: DbSession, org_id: OrgId, request: Request, actor: User = Operator,
+    dry_run: bool = Query(False, description="Validate and report without persisting"),
 ):
     """Bulk import from a CSV export (columns: ConsumerNO, Name, CardID, Department).
 
     Mirrors the legacy software's "Import consumer's information from Excel"
-    (manual section 5.3). Rows with problems are reported, valid rows are
-    created; missing departments are created on the fly.
+    (manual section 5.3). Staged: pass ``dry_run=true`` first to validate every
+    row and see what would be created (and which departments are new) without
+    writing; then repeat without it to apply. Rows with problems are reported;
+    valid rows are created and missing departments created on the fly.
     """
     if file.filename and not file.filename.lower().endswith((".csv", ".txt")):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Upload a CSV file (export the Excel as CSV)")
     content = await file.read()
     if len(content) > 5 * 1024 * 1024:
         raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "File larger than 5 MB")
-    summary = import_cardholders_csv(db, org_id, content)
-    record_audit(db, user=actor, action="import", resource_type="cardholder",
-                 request=request, organization_id=org_id,
-                 details={"created": summary.created, "errors": len(summary.errors)})
+    summary = import_cardholders_csv(db, org_id, content, dry_run=dry_run)
+    record_audit(db, user=actor, action="import_preview" if dry_run else "import",
+                 resource_type="cardholder", request=request, organization_id=org_id,
+                 details={"dry_run": dry_run, "created": summary.created,
+                          "valid": summary.valid, "errors": len(summary.errors)})
     db.commit()
-    return ImportResult(created=summary.created, errors=summary.errors)
+    return _import_result(summary)
 
 
 @router.post("/import-mdb", response_model=ImportResult)
 async def import_cardholders_mdb(
-    file: UploadFile, db: DbSession, org_id: OrgId, request: Request, actor: User = Operator
+    file: UploadFile, db: DbSession, org_id: OrgId, request: Request, actor: User = Operator,
+    dry_run: bool = Query(False, description="Validate and report without persisting"),
 ):
     """Import personnel from the legacy Access database (iCCard3000.mdb).
 
     The consumer table is auto-detected by its columns (ConsumerNO, Name,
-    CardID, Department). Requires mdbtools on the server (bundled in the
-    Docker image).
+    CardID, Department). Staged like the CSV import: pass ``dry_run=true`` to
+    validate the detected table without writing, then repeat to apply. Requires
+    mdbtools on the server (bundled in the Docker image).
     """
     if file.filename and not file.filename.lower().endswith(".mdb"):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Upload an Access .mdb file")
@@ -175,17 +188,18 @@ async def import_cardholders_mdb(
         mdb_path = Path(tmp) / "legacy.mdb"
         mdb_path.write_bytes(content)
         try:
-            summary, table = import_mdb(db, org_id, str(mdb_path))
+            summary, table = import_mdb(db, org_id, str(mdb_path), dry_run=dry_run)
         except MdbToolsNotAvailable as exc:
             raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
-    record_audit(db, user=actor, action="import_mdb", resource_type="cardholder",
-                 request=request, organization_id=org_id,
-                 details={"created": summary.created, "errors": len(summary.errors), "table": table})
+    record_audit(db, user=actor, action="import_mdb_preview" if dry_run else "import_mdb",
+                 resource_type="cardholder", request=request, organization_id=org_id,
+                 details={"dry_run": dry_run, "created": summary.created,
+                          "valid": summary.valid, "errors": len(summary.errors), "table": table})
     db.commit()
-    return ImportResult(created=summary.created, errors=summary.errors)
+    return _import_result(summary)
 
 
 # --- Credentials ---

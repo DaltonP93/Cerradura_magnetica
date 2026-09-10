@@ -1,5 +1,5 @@
 """Attendance: shifts, leaves, manual signs and the attendance report."""
-from datetime import date
+from datetime import UTC, date
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
@@ -137,7 +137,12 @@ def create_manual_sign(
 ):
     get_or_404(db, Cardholder, body.cardholder_id, org_id)
     data = body.model_dump()
-    data["signed_at"] = data["signed_at"].replace(tzinfo=None)  # store naive UTC like events
+    # Store UTC (naive), like events: convert an offset-aware input to UTC first
+    # so a client sending a local time with offset isn't misread as UTC.
+    signed_at = data["signed_at"]
+    if signed_at.tzinfo is not None:
+        signed_at = signed_at.astimezone(UTC)
+    data["signed_at"] = signed_at.replace(tzinfo=None)
     sign = ManualSign(organization_id=org_id, created_by_id=actor.id, **data)
     db.add(sign)
     db.flush()
@@ -166,6 +171,7 @@ def attendance_report(
     date_to: date,
     department_id: int | None = None,
     cardholder_id: int | None = None,
+    timezone: str = Query("UTC", description="IANA timezone for day boundaries and shift times"),
 ):
     try:
         rows = compute_attendance(
@@ -175,6 +181,7 @@ def attendance_report(
             date_to=date_to,
             department_id=department_id,
             cardholder_id=cardholder_id,
+            timezone=timezone,
         )
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc

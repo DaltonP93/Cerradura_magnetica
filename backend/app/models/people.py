@@ -4,6 +4,7 @@ from datetime import datetime
 from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.crypto import EncryptedString
 from app.core.database import Base
 from app.models.base import CredentialType, OrgScopedMixin, TimestampMixin
 
@@ -65,7 +66,8 @@ class Credential(Base, TimestampMixin, OrgScopedMixin):
         Enum(CredentialType), default=CredentialType.CARD, nullable=False
     )
     card_number: Mapped[str] = mapped_column(String(50), index=True, nullable=False)
-    pin: Mapped[str | None] = mapped_column(String(20))  # required for CARD_PLUS_PIN
+    # Stored encrypted at rest (see app.core.crypto); the attribute is plaintext.
+    pin: Mapped[str | None] = mapped_column(EncryptedString(255))  # required for CARD_PLUS_PIN
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     cardholder: Mapped[Cardholder] = relationship(back_populates="credentials")

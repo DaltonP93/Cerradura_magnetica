@@ -1,9 +1,10 @@
 """Organizations (tenants) and platform users."""
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.crypto import EncryptedString
 from app.core.database import Base
 from app.models.base import TimestampMixin, UserRole
 
@@ -34,5 +35,13 @@ class User(Base, TimestampMixin):
     role: Mapped[UserRole] = mapped_column(Enum(UserRole), default=UserRole.VIEWER, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # Brute-force protection: consecutive failed logins and a temporary lock.
+    failed_login_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # TOTP multi-factor authentication. The secret is encrypted at rest.
+    mfa_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    mfa_secret: Mapped[str | None] = mapped_column(EncryptedString(255))
 
     organization: Mapped[Organization | None] = relationship(back_populates="users")

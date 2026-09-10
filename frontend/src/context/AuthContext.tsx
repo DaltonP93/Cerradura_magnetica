@@ -9,12 +9,9 @@ import {
 } from 'react';
 import { authApi, organizationsApi } from '../api';
 import {
-  clearTokens,
   enableOrgScoping,
-  getAccessToken,
   getScopedOrgId,
   setScopedOrgId,
-  setTokens,
 } from '../api/client';
 import type { Organization, User, UserRole } from '../types';
 
@@ -66,10 +63,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let cancelled = false;
     async function bootstrap() {
-      if (!getAccessToken()) {
-        setLoading(false);
-        return;
-      }
+      // Authentication lives in HttpOnly cookies invisible to JS, so we simply
+      // ask the server who we are. A 401 (after a silent refresh attempt by the
+      // interceptor) means we are not logged in.
       try {
         const me = await authApi.me();
         if (cancelled) return;
@@ -80,7 +76,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           enableOrgScoping(false);
         }
       } catch {
-        if (!cancelled) clearTokens();
+        if (!cancelled) setUser(null);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -93,8 +89,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(
     async (email: string, password: string) => {
-      const pair = await authApi.login(email, password);
-      setTokens(pair);
+      // The server sets the auth cookies; the token body is ignored here.
+      await authApi.login(email, password);
       const me = await authApi.me();
       if (me.role === 'super_admin') {
         await bootstrapSuperAdmin(me);
@@ -107,7 +103,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const logout = useCallback(() => {
-    clearTokens();
+    // Revoke the session and clear cookies server-side; ignore network errors.
+    void authApi.logout().catch(() => undefined);
     setScopedOrgId(null);
     enableOrgScoping(false);
     setUser(null);

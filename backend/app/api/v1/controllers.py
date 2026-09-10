@@ -12,15 +12,17 @@ from app.models import (
     Credential,
     Door,
     EventType,
+    GatewayCommandType,
     Site,
     User,
     UserRole,
 )
 from app.schemas.common import Message, Page
 from app.schemas.infrastructure import CommandResult, ControllerCreate, ControllerOut, ControllerUpdate
+from app.services import command_dispatch
 from app.services.audit import record_audit
 from app.services.events import record_event
-from app.services.gateway import get_gateway
+from app.services.gateway import call_gateway, get_gateway
 
 router = APIRouter(prefix="/controllers", tags=["controllers"])
 
@@ -119,11 +121,26 @@ def delete_controller(
 
 
 @router.post("/{controller_id}/ping", response_model=CommandResult)
-async def ping_controller(
+def ping_controller(
     controller_id: int, db: DbSession, org_id: OrgId, actor: User = Operator
 ):
+    # Synchronous handler: release the DB connection before the network ping,
+    # then reopen a short transaction to record the observed status.
     controller = get_or_404(db, Controller, controller_id, org_id)
-    result = await get_gateway().ping(controller)
+
+    if command_dispatch.bridge_mode():
+        command = command_dispatch.enqueue_command(
+            db, organization_id=org_id, controller_id=controller.id, type=GatewayCommandType.PING,
+        )
+        db.commit()
+        return CommandResult(success=True, message=f"Ping queued for the local bridge (#{command.id})")
+
+    db.expunge(controller)
+    db.commit()
+
+    result = call_gateway(get_gateway().ping(controller))
+
+    controller = get_or_404(db, Controller, controller_id, org_id)
     previous = controller.status
     controller.status = ControllerStatus.ONLINE if result.success else ControllerStatus.OFFLINE
     if result.success:
@@ -141,24 +158,41 @@ async def ping_controller(
 
 
 @router.post("/{controller_id}/sync-time", response_model=CommandResult)
-async def sync_controller_time(
+def sync_controller_time(
     controller_id: int, db: DbSession, org_id: OrgId, request: Request, actor: User = Operator
 ):
     controller = get_or_404(db, Controller, controller_id, org_id)
-    result = await get_gateway().sync_time(controller)
+    controller_id_val = controller.id
+
+    if command_dispatch.bridge_mode():
+        command = command_dispatch.enqueue_command(
+            db, organization_id=org_id, controller_id=controller_id_val,
+            type=GatewayCommandType.SYNC_TIME,
+        )
+        record_audit(db, user=actor, action="command:sync_time", resource_type="controller",
+                     resource_id=controller_id_val, request=request, organization_id=org_id,
+                     details={"queued": True, "command_id": command.id})
+        db.commit()
+        return CommandResult(success=True, message="Time sync queued for the local bridge")
+
+    db.expunge(controller)
+    db.commit()  # release before the network round-trip
+
+    result = call_gateway(get_gateway().sync_time(controller))
     record_audit(db, user=actor, action="command:sync_time", resource_type="controller",
-                 resource_id=controller.id, request=request, organization_id=org_id,
+                 resource_id=controller_id_val, request=request, organization_id=org_id,
                  details={"success": result.success})
     db.commit()
     return CommandResult(success=result.success, message=result.message)
 
 
 @router.post("/{controller_id}/sync-permissions", response_model=CommandResult)
-async def sync_controller_permissions(
+def sync_controller_permissions(
     controller_id: int, db: DbSession, org_id: OrgId, request: Request, actor: User = Operator
 ):
     """Push all active card permissions for this board so it can decide offline."""
     controller = get_or_404(db, Controller, controller_id, org_id)
+    controller_id_val = controller.id
     door_ids = {d.id: d.number for d in controller.doors}
 
     cards: dict[str, dict] = {}
@@ -188,9 +222,34 @@ async def sync_controller_permissions(
             "valid_to": holder.valid_to.date() if holder.valid_to else None,
         }
 
-    result = await get_gateway().sync_permissions(controller, list(cards.values()))
+    if command_dispatch.bridge_mode():
+        payload_cards = [
+            {
+                "card_number": c["card_number"],
+                "doors": c["doors"],
+                "valid_from": c["valid_from"].isoformat() if c["valid_from"] else None,
+                "valid_to": c["valid_to"].isoformat() if c["valid_to"] else None,
+            }
+            for c in cards.values()
+        ]
+        command = command_dispatch.enqueue_command(
+            db, organization_id=org_id, controller_id=controller_id_val,
+            type=GatewayCommandType.SYNC_PERMISSIONS, payload={"cards": payload_cards},
+        )
+        record_audit(db, user=actor, action="command:sync_permissions", resource_type="controller",
+                     resource_id=controller_id_val, request=request, organization_id=org_id,
+                     details={"queued": True, "cards": len(payload_cards), "command_id": command.id})
+        db.commit()
+        return CommandResult(success=True, message=f"{len(payload_cards)} card permissions queued for the local bridge")
+
+    # The card set is fully materialized; release the connection before the
+    # (potentially large) upload to the board.
+    db.expunge(controller)
+    db.commit()
+
+    result = call_gateway(get_gateway().sync_permissions(controller, list(cards.values())))
     record_audit(db, user=actor, action="command:sync_permissions", resource_type="controller",
-                 resource_id=controller.id, request=request, organization_id=org_id,
+                 resource_id=controller_id_val, request=request, organization_id=org_id,
                  details={"cards": len(cards), "success": result.success})
     db.commit()
     return CommandResult(success=result.success, message=result.message)

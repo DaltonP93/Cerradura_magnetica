@@ -5,7 +5,13 @@ from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, Uni
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
-from app.models.base import ControllerStatus, DoorMode, OrgScopedMixin, TimestampMixin
+from app.models.base import (
+    ControllerStatus,
+    DoorMode,
+    DoorOpenRequestStatus,
+    OrgScopedMixin,
+    TimestampMixin,
+)
 
 
 class Site(Base, TimestampMixin, OrgScopedMixin):
@@ -62,5 +68,44 @@ class Door(Base, TimestampMixin, OrgScopedMixin):
     first_card_open: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     # MultiCard access (manual 3.2.8): cards required simultaneously to open (1 = disabled).
     multi_card_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    # Two-person rule: a critical door cannot be opened remotely by a single
+    # operator; a second, distinct operator must approve the request.
+    requires_dual_approval: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     controller: Mapped[Controller] = relationship(back_populates="doors")
+    open_requests: Mapped[list["DoorOpenRequest"]] = relationship(
+        back_populates="door", cascade="all, delete-orphan"
+    )
+
+
+class DoorOpenRequest(Base, TimestampMixin, OrgScopedMixin):
+    """A pending/resolved remote-open request for a dual-approval door.
+
+    Enforces the two-person rule: the operator who creates the request cannot
+    be the one who approves it, and only the approval actually drives the
+    gateway open command.
+    """
+
+    __tablename__ = "door_open_requests"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    door_id: Mapped[int] = mapped_column(
+        ForeignKey("doors.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    controller_id: Mapped[int] = mapped_column(
+        ForeignKey("controllers.id", ondelete="CASCADE"), nullable=False
+    )
+    requested_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    approved_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    status: Mapped[DoorOpenRequestStatus] = mapped_column(
+        Enum(DoorOpenRequestStatus), default=DoorOpenRequestStatus.PENDING, index=True, nullable=False
+    )
+    reason: Mapped[str | None] = mapped_column(String(500))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    door: Mapped[Door] = relationship(back_populates="open_requests")

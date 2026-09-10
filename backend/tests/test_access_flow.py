@@ -144,6 +144,23 @@ def test_card_plus_pin(client, admin_headers, operator_headers, setup_access):
     assert swipe(client, operator_headers, door_id, "77777", pin="1234")["granted"] is True
 
 
+def test_pin_only_requires_pin(client, admin_headers, operator_headers, setup_access):
+    """A PIN-only credential must not be granted on the card number alone."""
+    holder_id = setup_access["holder"]["id"]
+    cred = client.post(
+        f"/api/v1/cardholders/{holder_id}/credentials",
+        json={"card_number": "88888", "type": "pin", "pin": "4321"},
+        headers=admin_headers,
+    )
+    assert cred.status_code == 201
+    door_id = setup_access["doors"][0]["id"]
+    # No PIN and wrong PIN are both denied...
+    assert swipe(client, operator_headers, door_id, "88888")["reason"] == "wrong_pin"
+    assert swipe(client, operator_headers, door_id, "88888", pin="0000")["reason"] == "wrong_pin"
+    # ...only the correct PIN opens.
+    assert swipe(client, operator_headers, door_id, "88888", pin="4321")["granted"] is True
+
+
 def test_swipe_events_recorded(client, admin_headers, operator_headers, setup_access):
     door_id = setup_access["doors"][0]["id"]
     swipe(client, operator_headers, door_id, "55555")
@@ -155,6 +172,16 @@ def test_swipe_events_recorded(client, admin_headers, operator_headers, setup_ac
     assert denied["items"][0]["details"]["reason"] == "unknown_credential"
 
 
+def test_event_card_number_is_masked(client, admin_headers, operator_headers, setup_access):
+    """Card numbers must be masked in events/audit (invariant #6), not stored raw."""
+    door_id = setup_access["doors"][0]["id"]
+    swipe(client, operator_headers, door_id, "99999")  # unknown card
+    denied = client.get("/api/v1/events", params={"type": "access_denied"}, headers=admin_headers).json()
+    stored = denied["items"][0]["details"]["card_number"]
+    assert stored == "*9999"
+    assert "99999" not in stored
+
+
 def test_duplicate_card_number_rejected(client, admin_headers, setup_access):
     holder_id = setup_access["holder"]["id"]
     resp = client.post(
@@ -163,3 +190,24 @@ def test_duplicate_card_number_rejected(client, admin_headers, setup_access):
         headers=admin_headers,
     )
     assert resp.status_code == 409
+
+
+def test_keypad_virtual_card_number_resolves_to_pin(client, admin_headers, operator_headers, setup_access):
+    """A keypad emits a PIN as a 10-digit card number; it resolves to the PIN credential."""
+    holder_id = setup_access["holder"]["id"]
+    cred = client.post(
+        f"/api/v1/cardholders/{holder_id}/credentials",
+        json={"card_number": "77001", "type": "pin", "pin": "4321"},
+        headers=admin_headers,
+    )
+    assert cred.status_code == 201, cred.text
+    door_id = setup_access["doors"][0]["id"]
+    # PIN 4321 -> virtual card number "0000004321"; no separate PIN is sent.
+    result = swipe(client, operator_headers, door_id, "0000004321")
+    assert result["granted"] is True
+    assert result["cardholder_id"] == holder_id
+
+
+def test_unknown_virtual_card_number_denied(client, operator_headers, setup_access):
+    door_id = setup_access["doors"][0]["id"]
+    assert swipe(client, operator_headers, door_id, "0000009999")["reason"] == "unknown_credential"

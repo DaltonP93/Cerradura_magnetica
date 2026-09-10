@@ -5,6 +5,7 @@ mirroring the rules of the original L04 desktop software: credential state,
 cardholder validity window, access levels (door + schedule), holidays and
 door mode.
 """
+import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
@@ -12,6 +13,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.masking import mask_card
 from app.models import (
     AccessLevel,
     Cardholder,
@@ -25,6 +27,7 @@ from app.models import (
     Schedule,
 )
 from app.services.events import record_event
+from app.services.wiegand import looks_like_virtual_card, virtual_card_number
 
 
 @dataclass
@@ -33,6 +36,36 @@ class AccessDecision:
     reason: DeniedReason | None = None
     cardholder: Cardholder | None = None
     credential: Credential | None = None
+
+
+# Credential types that require a PIN as a second (or sole) factor.
+_PIN_REQUIRED = frozenset({CredentialType.CARD_PLUS_PIN, CredentialType.PIN})
+
+
+def _pin_matches(presented: str | None, stored: str | None) -> bool:
+    """Constant-time PIN comparison; a missing PIN on either side never matches."""
+    if not presented or not stored:
+        return False
+    return secrets.compare_digest(presented, stored)
+
+
+def _resolve_virtual_pin(db: Session, organization_id: int, card_number: str) -> Credential | None:
+    """Match a 10-digit keypad virtual card number to its active PIN credential."""
+    if not looks_like_virtual_card(card_number):
+        return None
+    credentials = db.execute(
+        select(Credential)
+        .options(selectinload(Credential.cardholder))
+        .where(
+            Credential.organization_id == organization_id,
+            Credential.type == CredentialType.PIN,
+            Credential.is_active.is_(True),
+        )
+    ).scalars()
+    for credential in credentials:
+        if credential.pin and virtual_card_number(credential.pin) == card_number:
+            return credential
+    return None
 
 
 def _as_utc(dt: datetime | None) -> datetime | None:
@@ -95,11 +128,28 @@ def evaluate_access(
             Credential.card_number == card_number,
         )
     ).scalar_one_or_none()
+
+    # Keypad "virtual card number" mode: a typed PIN arrives as a 10-digit card
+    # number. If it matches no real card, resolve it to the PIN credential that
+    # produced it — the PIN is inherently verified by that match.
+    pin_verified_by_virtual = False
     if credential is None:
-        return AccessDecision(False, DeniedReason.UNKNOWN_CREDENTIAL)
+        credential = _resolve_virtual_pin(db, organization_id, card_number)
+        if credential is None:
+            return AccessDecision(False, DeniedReason.UNKNOWN_CREDENTIAL)
+        pin_verified_by_virtual = True
+
     if not credential.is_active:
         return AccessDecision(False, DeniedReason.CREDENTIAL_INACTIVE, credential.cardholder, credential)
-    if credential.type == CredentialType.CARD_PLUS_PIN and (not pin or pin != credential.pin):
+    # A PIN is mandatory for both card+PIN and PIN-only credentials. Without
+    # this, a PIN-only credential would be granted on the card number alone,
+    # bypassing its second factor (invariant #3). A virtual-card match already
+    # proves the PIN.
+    if (
+        credential.type in _PIN_REQUIRED
+        and not pin_verified_by_virtual
+        and not _pin_matches(pin, credential.pin)
+    ):
         return AccessDecision(False, DeniedReason.WRONG_PIN, credential.cardholder, credential)
 
     holder = credential.cardholder
@@ -166,7 +216,7 @@ def process_swipe(
         message = f"Access granted to {holder.full_name} at {door.name}" if holder else f"Access granted at {door.name}"
         event_type = EventType.ACCESS_GRANTED
     else:
-        who = holder.full_name if holder else f"card {card_number}"
+        who = holder.full_name if holder else f"card {mask_card(card_number)}"
         message = f"Access denied to {who} at {door.name} ({decision.reason.value if decision.reason else 'unknown'})"
         event_type = EventType.ACCESS_DENIED
 
@@ -179,6 +229,6 @@ def process_swipe(
         door_id=door.id,
         cardholder_id=holder.id if holder else None,
         credential_id=decision.credential.id if decision.credential else None,
-        details={"card_number": card_number, "reason": decision.reason.value if decision.reason else None},
+        details={"card_number": mask_card(card_number), "reason": decision.reason.value if decision.reason else None},
     )
     return decision, event.id

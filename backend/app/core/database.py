@@ -20,6 +20,10 @@ if settings.database_url.startswith("sqlite"):
     def _set_sqlite_pragma(dbapi_connection, _connection_record):
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
+        # Let a writer wait for a concurrent writer to commit instead of failing
+        # immediately, so the compare-and-swap in the refresh path resolves
+        # deterministically (the loser then sees the generation already spent).
+        cursor.execute("PRAGMA busy_timeout=5000")
         cursor.close()
 
 

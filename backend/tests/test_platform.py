@@ -66,6 +66,35 @@ def test_admin_cannot_grant_super_admin(client, admin_headers):
     assert resp.status_code == 403
 
 
+def test_admin_cannot_hijack_super_admin(client, admin_headers, seeded):
+    """A tenant admin must never modify or delete a platform super admin, even
+    if one were mis-scoped into the admin's own organization."""
+    from app.core.database import SessionLocal
+    from app.models import User, UserRole
+
+    # Plant a super admin inside org A (the dangerous, seed-bug scenario).
+    db = SessionLocal()
+    try:
+        planted = User(
+            email="planted-super@test.com", full_name="Planted Super",
+            role=UserRole.SUPER_ADMIN, hashed_password="x", organization_id=seeded["org_a"],
+        )
+        db.add(planted)
+        db.commit()
+        planted_id = planted.id
+    finally:
+        db.close()
+
+    # Admin A cannot reset its password...
+    resp = client.patch(
+        f"/api/v1/users/{planted_id}", json={"password": "hijacked123"}, headers=admin_headers
+    )
+    assert resp.status_code == 404
+    # ...nor delete it.
+    resp = client.delete(f"/api/v1/users/{planted_id}", headers=admin_headers)
+    assert resp.status_code == 404
+
+
 def test_dashboard_stats(client, admin_headers, operator_headers, controller_with_doors):
     door_id = controller_with_doors["doors"][0]["id"]
     client.post(

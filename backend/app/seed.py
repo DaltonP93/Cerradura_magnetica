@@ -1,10 +1,13 @@
 """Seed the database with a demo organization and sample data.
 
 Run:  python -m app.seed
+
+This creates demo accounts with weak, well-known passwords and is intended for
+local development only. It refuses to run when ACP_ENVIRONMENT=production.
 """
 from datetime import time
 
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.database import Base, SessionLocal, engine
 from app.core.security import hash_password
 from app.models import (
@@ -24,10 +27,14 @@ from app.models import (
     UserRole,
 )
 
-settings = get_settings()
 
-
-def seed() -> None:
+def seed(cfg: Settings | None = None) -> None:
+    cfg = cfg or get_settings()
+    if cfg.is_production:
+        raise SystemExit(
+            "Refusing to run the demo seed in production. It creates accounts with "
+            "well-known passwords; provision real accounts instead."
+        )
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
     try:
@@ -39,12 +46,15 @@ def seed() -> None:
         db.add(demo)
         db.flush()
 
+        # The platform super admin is tenant-agnostic: it must NOT belong to any
+        # organization, otherwise a tenant admin sharing that org could reach and
+        # modify it (privilege escalation to platform level).
         superadmin = User(
-            email=settings.first_superuser_email.lower(),
+            email=cfg.first_superuser_email.lower(),
             full_name="Platform Admin",
-            hashed_password=hash_password(settings.first_superuser_password),
+            hashed_password=hash_password(cfg.first_superuser_password),
             role=UserRole.SUPER_ADMIN,
-            organization_id=demo.id,
+            organization_id=None,
         )
         org_admin = User(
             email="demo-admin@example.com",
@@ -149,10 +159,11 @@ def seed() -> None:
         )
 
         db.commit()
-        print("Seed complete.")
-        print(f"  Super admin: {settings.first_superuser_email} / {settings.first_superuser_password}")
-        print("  Org admin:   demo-admin@example.com / demo1234")
-        print("  Operator:    demo-operator@example.com / demo1234")
+        print("Seed complete. Demo accounts created (development only):")
+        print(f"  Super admin: {cfg.first_superuser_email}")
+        print("  Org admin:   demo-admin@example.com")
+        print("  Operator:    demo-operator@example.com")
+        print("Passwords are the configured/demo development defaults; change them before any real use.")
     finally:
         db.close()
 
