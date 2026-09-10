@@ -23,6 +23,8 @@ from app.schemas.auth import (
     ChangePasswordRequest,
     LoginRequest,
     MfaDisableRequest,
+    MfaEnableResponse,
+    MfaRecoveryRegenerateRequest,
     MfaSetupResponse,
     MfaVerifyRequest,
     RefreshRequest,
@@ -30,7 +32,7 @@ from app.schemas.auth import (
     UserOut,
 )
 from app.schemas.common import Message
-from app.services import sessions
+from app.services import mfa_recovery, sessions
 from app.services.audit import record_audit
 from app.services.events import manager
 
@@ -79,17 +81,30 @@ def login(body: LoginRequest, db: DbSession, request: Request, response: Respons
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Organization is suspended")
 
     # Second factor, if enabled. A missing code is a two-step prompt (not a
-    # failed attempt); a wrong code counts toward the lockout.
+    # failed attempt); a wrong code counts toward the lockout. F-5: a one-time
+    # recovery code may be presented instead of the TOTP code (device lost).
     if user.mfa_enabled:
-        if not body.mfa_code:
+        if not body.mfa_code and not body.recovery_code:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "MFA code required")
-        if not verify_code(user.mfa_secret, body.mfa_code):
+        code_ok = bool(body.mfa_code) and verify_code(user.mfa_secret, body.mfa_code)
+        recovery_ok = False
+        if not code_ok and body.recovery_code:
+            # Consuming a recovery code mutates the user; it is persisted by the
+            # commit below on the success path.
+            recovery_ok = mfa_recovery.consume(user, body.recovery_code)
+        if not code_ok and not recovery_ok:
             user.failed_login_count += 1
             if user.failed_login_count >= settings.login_max_attempts:
                 user.locked_until = now + timedelta(minutes=settings.login_lockout_minutes)
                 user.failed_login_count = 0
             db.commit()
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid MFA code")
+        if recovery_ok:
+            record_audit(
+                db, user=user, action="mfa_recovery_code_used", resource_type="user",
+                resource_id=user.id, request=request,
+                details={"remaining_recovery_codes": mfa_recovery.remaining(user)},
+            )
 
     # A successful login clears any accumulated failure state.
     user.failed_login_count = 0
@@ -198,16 +213,40 @@ def mfa_setup(user: CurrentUser, db: DbSession):
     return MfaSetupResponse(secret=secret, provisioning_uri=provisioning_uri(secret, user.email))
 
 
-@router.post("/mfa/enable", response_model=Message)
+@router.post("/mfa/enable", response_model=MfaEnableResponse)
 def mfa_enable(body: MfaVerifyRequest, user: CurrentUser, db: DbSession, request: Request):
     if not user.mfa_secret:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Start MFA setup first")
     if not verify_code(user.mfa_secret, body.code):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid MFA code")
     user.mfa_enabled = True
+    # F-5: issue one-time recovery codes so a lost TOTP device is recoverable.
+    # Store only the hashes; the plaintext is returned once, here, and never again.
+    codes, hashes = mfa_recovery.generate()
+    user.mfa_recovery_hashes = hashes
     record_audit(db, user=user, action="mfa_enabled", resource_type="user", resource_id=user.id, request=request)
     db.commit()
-    return Message(detail="MFA enabled")
+    return MfaEnableResponse(detail="MFA enabled", recovery_codes=codes)
+
+
+@router.post("/mfa/recovery-codes", response_model=MfaEnableResponse)
+def mfa_regenerate_recovery_codes(
+    body: MfaRecoveryRegenerateRequest, user: CurrentUser, db: DbSession, request: Request
+):
+    """Re-issue recovery codes (e.g. after some were used). Requires the current
+    password AND a valid TOTP code; the previous codes are invalidated."""
+    if not verify_password(body.password, user.hashed_password):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Current password is incorrect")
+    if not user.mfa_enabled or not verify_code(user.mfa_secret, body.code):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid MFA code")
+    codes, hashes = mfa_recovery.generate()
+    user.mfa_recovery_hashes = hashes  # replaces (invalidates) any prior codes
+    record_audit(
+        db, user=user, action="mfa_recovery_codes_regenerated", resource_type="user",
+        resource_id=user.id, request=request,
+    )
+    db.commit()
+    return MfaEnableResponse(detail="Recovery codes regenerated", recovery_codes=codes)
 
 
 @router.post("/mfa/disable", response_model=Message)
@@ -218,6 +257,7 @@ def mfa_disable(body: MfaDisableRequest, user: CurrentUser, db: DbSession, reque
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid MFA code")
     user.mfa_enabled = False
     user.mfa_secret = None
+    user.mfa_recovery_hashes = None  # discard recovery codes with the second factor
     record_audit(db, user=user, action="mfa_disabled", resource_type="user", resource_id=user.id, request=request)
     db.commit()
     return Message(detail="MFA disabled")

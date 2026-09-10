@@ -10,6 +10,10 @@ class LoginRequest(BaseModel):
     email: EmailStr
     password: str
     mfa_code: str | None = Field(default=None, max_length=10)
+    # F-5: a one-time recovery code, presented instead of the TOTP code when the
+    # authenticator device is unavailable. Kept in its own field (recovery codes
+    # are longer than the 6-digit TOTP code that ``mfa_code`` caps at).
+    recovery_code: str | None = Field(default=None, max_length=64)
 
 
 class TokenPair(BaseModel):
@@ -45,7 +49,19 @@ class MfaVerifyRequest(BaseModel):
     code: str = Field(min_length=6, max_length=10)
 
 
+class MfaEnableResponse(BaseModel):
+    detail: str
+    # Shown exactly once. The server stores only their hashes; keep them safe.
+    recovery_codes: list[str]
+
+
 class MfaDisableRequest(BaseModel):
+    password: str
+    code: str = Field(min_length=6, max_length=10)
+
+
+class MfaRecoveryRegenerateRequest(BaseModel):
+    """Re-issue recovery codes; requires the password and a current TOTP code."""
     password: str
     code: str = Field(min_length=6, max_length=10)
 
