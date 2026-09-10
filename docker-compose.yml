@@ -14,6 +14,22 @@ services:
       timeout: 3s
       retries: 10
 
+  # One-shot schema migration job. Runs `alembic upgrade head` to completion
+  # before the backend starts, so migrations are applied exactly once as an
+  # explicit deploy step — not concurrently by every backend replica at boot
+  # (which would race). The Alembic chain is linear (a single head).
+  migrate:
+    build: ./backend
+    restart: "no"
+    environment:
+      ACP_DATABASE_URL: postgresql+psycopg2://acp:${POSTGRES_PASSWORD:-acp-dev-password}@db:5432/access_control
+      ACP_SECRET_KEY: ${ACP_SECRET_KEY:?set ACP_SECRET_KEY in .env}
+      ACP_ENVIRONMENT: ${ACP_ENVIRONMENT:-development}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: alembic upgrade head
+
   backend:
     build: ./backend
     restart: unless-stopped
@@ -41,6 +57,13 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      # Schema is migrated by the one-shot `migrate` job before the app starts.
+      migrate:
+        condition: service_completed_successfully
+    # --proxy-headers so the client IP behind nginx is honoured for rate limiting.
+    command: >
+      sh -c "{ [ \"$${ACP_ENVIRONMENT:-development}\" = production ] || python -m app.seed; } &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips '*'"
     # --proxy-headers so the client IP behind nginx is honoured for rate limiting,
     # trusting only ACP_FORWARDED_ALLOW_IPS (never a hard-coded "*").
     command: >

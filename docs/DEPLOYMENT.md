@@ -94,6 +94,9 @@ ventana y sus sockets:
 
 ## Migraciones
 
+Las migraciones corren como un **job dedicado y de una sola vez**: el servicio
+`migrate` de compose ejecuta `alembic upgrade head` hasta completar, y el
+backend arranca solo después (`depends_on: migrate → service_completed_successfully`).
 Las migraciones corren como un **job dedicado y de una sola vez** (PR #20): el
 servicio `migrate` de compose ejecuta `alembic upgrade head` hasta completar, y
 el backend arranca solo después (`depends_on: migrate → service_completed_successfully`).
