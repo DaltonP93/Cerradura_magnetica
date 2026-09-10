@@ -1,5 +1,11 @@
 # Bitácora de desarrollo — Control de Acceso / Cerradura Magnética
 
+> ⚠️ **DOCUMENTO HISTÓRICO (cronología), NO fuente de estado.** Se detiene el
+> 2026-09-03 (commit `48eb760`) y **no** refleja las Fases 2–7 posteriores ni el
+> conteo real de tests (177). Para el estado vigente usá `IMPLEMENTATION_STATUS.md`,
+> la evidencia de tests `TEST_EVIDENCE.md` y la seguridad `SECURITY.md`. Este log
+> se conserva como cronología para la auditoría externa ("Codex").
+
 > Documento vivo. Registra lo que el dueño del proyecto pidió y lo que efectivamente se
 > desarrolló, para servir de bitácora, referencia y base de una auditoría externa posterior
 > (proyecto "Codex").

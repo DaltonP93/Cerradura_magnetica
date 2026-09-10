@@ -20,6 +20,7 @@ import { Badge, StatusBadge } from '../components/StatusBadge';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { DOOR_MODE_LABELS, formatDateTime } from '../lib/format';
+import { ADVANCED_FLAGS_ENFORCED, ADVANCED_FLAGS_NOTICE } from '../lib/doorFlags';
 import { useDebounced, useFetch } from '../lib/useFetch';
 import type { Controller } from '../types';
 
@@ -347,11 +348,17 @@ export function ControllersPage() {
             </FormField>
           </div>
           {editing && (
-            <Checkbox
-              label="Interlock (una puerta abierta a la vez)"
-              checked={form.interlock_enabled}
-              onChange={(v) => setForm({ ...form, interlock_enabled: v })}
-            />
+            <div className="flex flex-col gap-2">
+              <div className="rounded-md border border-amber-500/40 bg-amber-950/30 px-3 py-2 text-xs text-amber-200">
+                <span className="font-semibold">Experimental · no aplicado.</span> {ADVANCED_FLAGS_NOTICE}
+              </div>
+              <Checkbox
+                label="Interlock (una puerta abierta a la vez) — no aplicado"
+                checked={form.interlock_enabled}
+                disabled={!ADVANCED_FLAGS_ENFORCED}
+                onChange={(v) => setForm({ ...form, interlock_enabled: v })}
+              />
+            </div>
           )}
           {formError && (
             <div className="rounded-md border border-red-500/40 bg-red-950/40 px-3 py-2 text-sm text-red-300">

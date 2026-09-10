@@ -44,6 +44,13 @@ class Settings(BaseSettings):
     cookie_samesite: str = "lax"  # lax | strict | none
     cookie_domain: str | None = None
 
+    # Trusted reverse-proxy IPs whose X-Forwarded-For/Proto uvicorn will honour
+    # (passed to `uvicorn --forwarded-allow-ips`). MUST be the reverse proxy's
+    # IP(s), never "*": trusting any peer lets a client spoof its source IP,
+    # bypassing the per-IP auth rate limit and forging the IP in the audit trail
+    # and session records. Production refuses "*" (see production_issues).
+    forwarded_allow_ips: str = "127.0.0.1"
+
     # Hardware gateway: "simulated" runs an in-process L04 simulator,
     # "tcp" talks to real boards on the network.
     gateway_mode: str = "simulated"
@@ -60,6 +67,11 @@ class Settings(BaseSettings):
     login_max_attempts: int = 5
     login_lockout_minutes: int = 15
     auth_rate_limit_per_minute: int = 30
+    # Optional Redis URL (e.g. redis://host:6379/0). When set, the auth rate
+    # limiter uses Redis so the per-IP limit is enforced **across all workers**
+    # (a single process otherwise only throttles its own share). When unset the
+    # limiter stays in-process (fine for a single worker).
+    redis_url: str | None = None
 
     # Two-person rule: a pending remote-open request on a critical door must be
     # approved by a second operator within this window before it expires.
@@ -69,6 +81,10 @@ class Settings(BaseSettings):
     # certificate (mTLS) and passes its fingerprint in this header. The edge MUST
     # set/overwrite it and strip any client-supplied value (see docs/GATEWAY_BRIDGE.md).
     bridge_cert_header: str = "X-Client-Cert-Fingerprint"
+    # F-4: the bridge also presents a per-bridge shared secret in this header, on
+    # top of the mTLS fingerprint. The API verifies it (constant-time) against a
+    # stored hash, so a spoofed/forwarded fingerprint alone is not enough to auth.
+    bridge_secret_header: str = "X-Bridge-Secret"
 
     # How controller/door commands reach the hardware:
     #   "direct" (default) — call the ControllerGateway synchronously (simulated
@@ -112,6 +128,11 @@ class Settings(BaseSettings):
             issues.append("ACP_COOKIE_SECURE must be true in production (cookies over HTTPS only)")
         if self.cookie_samesite.lower() == "none" and not self.cookie_secure:
             issues.append("SameSite=None cookies require ACP_COOKIE_SECURE=true")
+        if self.forwarded_allow_ips.strip() == "*":
+            issues.append(
+                "ACP_FORWARDED_ALLOW_IPS must not be '*' in production "
+                "(set it to the reverse proxy's IP(s); '*' lets clients spoof their source IP)"
+            )
         return issues
 
     @model_validator(mode="after")

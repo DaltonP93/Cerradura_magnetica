@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 import pytest
 from starlette.websockets import WebSocketDisconnect
 
+from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.core.security import create_access_token, create_refresh_token, hash_token
 from app.models import AuditLog, AuthRefreshToken, AuthSession
@@ -251,6 +252,34 @@ def test_ws_new_handshake_rejected_after_logout(client, seeded):
 def test_logout_closes_live_ws(client, seeded):
     tokens = _login(client)
     _assert_ws_closes(client, tokens["access_token"], lambda: client.post("/api/v1/auth/logout", headers=_auth(tokens)))
+
+
+# --- F-3: WebSocket Origin validation (anti-CSWSH) ------------------------
+
+def test_ws_rejects_cross_origin_handshake(client, seeded):
+    """A handshake from a foreign Origin is rejected even with a valid token."""
+    tokens = _login(client)
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect(
+            f"/ws/events?token={tokens['access_token']}",
+            headers={"origin": "http://evil.example"},
+        ) as ws:
+            ws.receive_text()
+
+
+def test_ws_accepts_allowed_origin(client, seeded):
+    """A same-origin (allowlisted) handshake is accepted; the live socket then
+    closes on logout — proving it passed the Origin gate rather than being
+    rejected at handshake."""
+    allowed = get_settings().cors_origin_list[0]
+    tokens = _login(client)
+    with client.websocket_connect(
+        f"/ws/events?token={tokens['access_token']}",
+        headers={"origin": allowed},
+    ) as ws:
+        client.post("/api/v1/auth/logout", headers=_auth(tokens))
+        with pytest.raises(WebSocketDisconnect):
+            ws.receive_text()
 
 
 def test_reuse_detection_closes_live_ws(client, seeded):
