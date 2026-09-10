@@ -1,7 +1,7 @@
 """Organizations (tenants) and platform users."""
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String
+from sqlalchemy import JSON, Boolean, DateTime, Enum, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.crypto import EncryptedString
@@ -43,5 +43,10 @@ class User(Base, TimestampMixin):
     # TOTP multi-factor authentication. The secret is encrypted at rest.
     mfa_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     mfa_secret: Mapped[str | None] = mapped_column(EncryptedString(255))
+    # F-5: SHA-256 hashes of the *unused* one-time recovery codes. Lets a user
+    # who lost the TOTP device still authenticate (availability). Only hashes are
+    # stored; the plaintext codes are shown once at enable/regenerate and never
+    # again. A consumed code is removed from this list.
+    mfa_recovery_hashes: Mapped[list | None] = mapped_column(JSON)
 
     organization: Mapped[Organization | None] = relationship(back_populates="users")

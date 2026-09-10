@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import secrets
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
@@ -20,6 +21,20 @@ from app.services.events import set_main_loop
 logging.basicConfig(level=logging.INFO)
 settings = get_settings()
 configure_logging(settings.json_logs)
+logger = logging.getLogger("acp.startup")
+
+
+def _warn_if_metrics_unprotected(cfg) -> bool:
+    """F-7: in production, an ungated /metrics leaks internal counters unless the
+    edge restricts it. We don't fail-fast (edge restriction is a documented,
+    valid alternative to a token — see DEPLOYMENT.md), but we warn loudly."""
+    if cfg.is_production and not cfg.metrics_token:
+        logger.warning(
+            "GET /metrics is not gated by ACP_METRICS_TOKEN in production; "
+            "set the token or restrict /metrics at the edge (see docs/DEPLOYMENT.md)."
+        )
+        return True
+    return False
 
 
 @asynccontextmanager
@@ -28,6 +43,7 @@ async def lifespan(app: FastAPI):
     # schema-managed by `alembic upgrade head`, so never auto-create there.
     if not settings.is_production:
         Base.metadata.create_all(bind=engine)
+    _warn_if_metrics_unprotected(settings)
     set_main_loop(asyncio.get_running_loop())
     # Fan session revocations out across workers (no-op unless ACP_REDIS_URL set).
     revocation_bus.start_subscriber()
@@ -89,6 +105,7 @@ def prometheus_metrics(request: Request):
     if token:
         header = request.headers.get("authorization", "")
         presented = header[7:] if header.lower().startswith("bearer ") else request.headers.get("x-metrics-token")
-        if presented != token:
+        # F-7: constant-time comparison (guard None → never matches).
+        if not presented or not secrets.compare_digest(presented, token):
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid metrics token")
     return PlainTextResponse(metrics.render(), media_type="text/plain; version=0.0.4")

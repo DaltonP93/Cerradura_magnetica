@@ -1,4 +1,4 @@
-import type { CredentialType, DoorMode, EventType, UserRole } from '../types';
+import type { CredentialType, DoorMode, DoorOpenRequestStatus, EventType, UserRole } from '../types';
 
 export function formatDateTime(iso: string | null | undefined): string {
   if (!iso) return '—';
@@ -60,6 +60,33 @@ export const ROLE_LABELS: Record<UserRole, string> = {
   operator: 'Operador',
   viewer: 'Visualizador',
 };
+
+export const DOOR_OPEN_REQUEST_STATUS_LABELS: Record<DoorOpenRequestStatus, string> = {
+  pending: 'Pendiente',
+  dispatched: 'Enviada al puente',
+  executed: 'Ejecutada',
+  rejected: 'Rechazada',
+  expired: 'Expirada',
+  failed: 'Fallida',
+};
+
+export type DoorRequestTone = 'amber' | 'sky' | 'green' | 'slate' | 'red';
+
+export function doorRequestTone(status: DoorOpenRequestStatus): DoorRequestTone {
+  switch (status) {
+    case 'pending':
+      return 'amber';
+    case 'dispatched':
+      return 'sky';
+    case 'executed':
+      return 'green';
+    case 'rejected':
+    case 'expired':
+      return 'slate';
+    case 'failed':
+      return 'red';
+  }
+}
 
 export const DOOR_MODE_LABELS: Record<DoorMode, string> = {
   controlled: 'Controlada',

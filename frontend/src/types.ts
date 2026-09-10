@@ -107,6 +107,7 @@ export interface Door {
   anti_passback: boolean;
   first_card_open: boolean;
   multi_card_count: number;
+  requires_dual_approval: boolean;
 }
 
 export interface DoorUpdate {
@@ -118,6 +119,30 @@ export interface DoorUpdate {
   anti_passback?: boolean;
   first_card_open?: boolean;
   multi_card_count?: number;
+  requires_dual_approval?: boolean;
+}
+
+// Two-person rule: a remote open on a critical door needs a second, distinct
+// operator to approve within the window before it executes.
+export type DoorOpenRequestStatus =
+  | 'pending'
+  | 'dispatched'
+  | 'executed'
+  | 'rejected'
+  | 'expired'
+  | 'failed';
+
+export interface DoorOpenRequest {
+  id: number;
+  door_id: number;
+  controller_id: number;
+  requested_by_id: number | null;
+  approved_by_id: number | null;
+  status: DoorOpenRequestStatus;
+  reason: string | null;
+  created_at: string;
+  expires_at: string;
+  resolved_at: string | null;
 }
 
 export interface Controller {

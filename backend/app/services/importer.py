@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.masking import mask_card
 from app.models import Cardholder, Credential, Department
 
 HEADER_ALIASES = {
@@ -117,10 +118,10 @@ def _build_plan(db: Session, organization_id: int, content: bytes) -> _Plan:
             summary.error(line_number, "Missing card number")
             continue
         if card in existing_cards:
-            summary.error(line_number, f"Card {card} already assigned")
+            summary.error(line_number, f"Card {mask_card(card)} already assigned")
             continue
         if card in seen_cards:
-            summary.error(line_number, f"Card {card} duplicated within the file")
+            summary.error(line_number, f"Card {mask_card(card)} duplicated within the file")
             continue
 
         dept_name = row.get("department", "") or None

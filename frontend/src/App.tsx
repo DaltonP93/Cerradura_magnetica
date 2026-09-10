@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import { Layout } from './components/Layout';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { AccessLevelsPage } from './pages/AccessLevelsPage';
+import { ApprovalsPage } from './pages/ApprovalsPage';
 import { AttendancePage } from './pages/AttendancePage';
 import { AuditPage } from './pages/AuditPage';
 import { CardholdersPage } from './pages/CardholdersPage';
@@ -32,6 +33,7 @@ export default function App() {
         <Route path="/monitoreo" element={<MonitoringPage />} />
         <Route path="/controladores" element={<ControllersPage />} />
         <Route path="/puertas" element={<DoorsPage />} />
+        <Route path="/aprobaciones" element={<ApprovalsPage />} />
         <Route path="/personal" element={<CardholdersPage />} />
         <Route path="/asistencia" element={<AttendancePage />} />
         <Route path="/departamentos" element={<DepartmentsPage />} />
