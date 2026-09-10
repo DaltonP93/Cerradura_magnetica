@@ -2,6 +2,18 @@
 
 Plataforma SaaS web multi-tenant para gestionar placas de control de acceso tipo **L04** (controladoras TCP/IP de 4 puertas con lectoras Wiegand). Reemplaza el software de escritorio Windows original ("Access Control Board Software") por una aplicación 100% web, robusta y profesional.
 
+## Estado y continuidad
+
+El estado real del proyecto y la guía de continuidad para una IA/persona nueva viven en estos documentos canónicos. **Corresponden al código de la rama `claude/develop` (PR #7) y están siendo incorporados vía PR #8** (aún no fusionados a `main`):
+
+- [`docs/AI_HANDOFF.md`](docs/AI_HANDOFF.md) — punto de entrada e índice maestro (snapshot reproducible + cómo detectar divergencia).
+- [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md) — qué está hecho (fase→estado→evidencia) + backlog P0–P3.
+- [`docs/REQUIREMENTS_TRACEABILITY.md`](docs/REQUIREMENTS_TRACEABILITY.md) — matriz de requisitos con IDs estables y evidencia.
+- [`docs/TEST_EVIDENCE.md`](docs/TEST_EVIDENCE.md) — evidencia de pruebas (conteo, comandos, CI, caveats).
+- [`docs/HARDWARE_STATUS.md`](docs/HARDWARE_STATUS.md) — plataforma vs. verificado contra hardware real (nada verificado en placa).
+
+> Nada está validado contra una placa N3000/L04 real. Un test verde no equivale a validación física.
+
 ## Funcionalidades
 
 - **Multi-tenant (SaaS)**: organizaciones aisladas, planes, y super administrador de plataforma.

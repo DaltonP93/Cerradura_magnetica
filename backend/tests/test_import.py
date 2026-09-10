@@ -59,6 +59,10 @@ def test_import_reports_errors_and_duplicates(client, admin_headers):
     assert any("already assigned" in r for r in reasons)
     assert any("Missing name" in r for r in reasons)
     assert any("Missing card" in r for r in reasons)
+    # F-6: the card number must be masked in error messages (last 4 only).
+    assigned = next(r for r in reasons if "already assigned" in r)
+    assert "40001" not in assigned
+    assert "*0001" in assigned
 
 
 def test_import_rejects_missing_columns_and_bad_extension(client, admin_headers):
@@ -106,4 +110,6 @@ def test_in_file_duplicate_card_is_flagged(client, admin_headers):
     body = upload(client, admin_headers, csv_content, dry_run=True).json()
     assert body["valid"] == 1
     reasons = [e["reason"] for e in body["errors"]]
-    assert any("duplicated within the file" in r for r in reasons)
+    dup = next(r for r in reasons if "duplicated within the file" in r)
+    assert "60001" not in dup  # F-6: card masked in the message
+    assert "*0001" in dup

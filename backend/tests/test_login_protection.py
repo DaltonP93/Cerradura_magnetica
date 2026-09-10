@@ -78,6 +78,68 @@ def test_rate_limiter_evicts_idle_keys():
     assert "b" in rl._hits
 
 
+def test_failed_login_count_is_db_authoritative(client, seeded):
+    """F-1: each failed login increments the persisted counter by exactly one."""
+    for expected in range(1, settings.login_max_attempts):
+        assert _fail_login(client).status_code == 401
+        assert _user().failed_login_count == expected
+
+
+def test_failed_login_counter_atomic_under_concurrency(seeded):
+    """F-1: concurrent increments must not be lost (no read-modify-write race).
+
+    The counter is bumped with an atomic ``failed_login_count + 1`` UPDATE, so K
+    concurrent bumps yield exactly K. On PostgreSQL (the backend-postgres CI job)
+    this exercises real row-lock concurrency; on SQLite the writes serialize and
+    a busy lock is retried.
+    """
+    import threading
+
+    from sqlalchemy import update
+    from sqlalchemy.exc import OperationalError
+
+    uid = _user().id
+    db = SessionLocal()
+    try:
+        u = db.get(User, uid)
+        u.failed_login_count = 0
+        u.locked_until = None
+        db.commit()
+    finally:
+        db.close()
+
+    k = 12
+    start = threading.Barrier(k)
+
+    def bump() -> None:
+        start.wait()
+        for _attempt in range(50):  # retry SQLite "database is locked"
+            s = SessionLocal()
+            try:
+                s.execute(
+                    update(User)
+                    .where(User.id == uid)
+                    .values(failed_login_count=User.failed_login_count + 1)
+                    .execution_options(synchronize_session=False)
+                )
+                s.commit()
+                return
+            except OperationalError:
+                s.rollback()
+                time.sleep(0.02)
+            finally:
+                s.close()
+        raise AssertionError("could not commit increment")
+
+    threads = [threading.Thread(target=bump) for _ in range(k)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert _user().failed_login_count == k  # no lost updates
+
+
 def test_auth_rate_limit_throttles_by_ip(client, seeded):
     auth_limiter.limit = 3
     auth_limiter.reset()
@@ -94,3 +156,52 @@ def test_auth_rate_limit_throttles_by_ip(client, seeded):
     finally:
         auth_limiter.limit = 0
         auth_limiter.reset()
+
+
+def test_missing_email_still_runs_one_password_verification(client, seeded, monkeypatch):
+    """F-8: an unregistered email must still trigger exactly one bcrypt check.
+
+    Otherwise a missing user short-circuits ``verify_password`` and answers far
+    faster than a real user, leaking which emails are registered by timing.
+    """
+    import app.api.v1.auth as auth_module
+
+    calls: list[str] = []
+    real_verify = auth_module.verify_password
+
+    def spy(plain, hashed):
+        calls.append(hashed)
+        return real_verify(plain, hashed)
+
+    monkeypatch.setattr(auth_module, "verify_password", spy)
+
+    resp = client.post(
+        "/api/v1/auth/login",
+        json={"email": "does-not-exist@test.com", "password": "whatever"},
+    )
+    # Generic 401 (no user-enumeration signal in the body) ...
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "Incorrect email or password"
+    # ... and the bcrypt work ran exactly once, against the dummy hash.
+    assert len(calls) == 1
+    assert calls[0] == auth_module._DUMMY_PW_HASH
+
+
+def test_wrong_password_runs_one_verification_against_real_hash(client, seeded, monkeypatch):
+    """A registered email with a bad password also runs a single real check."""
+    import app.api.v1.auth as auth_module
+
+    calls: list[str] = []
+    real_verify = auth_module.verify_password
+
+    def spy(plain, hashed):
+        calls.append(hashed)
+        return real_verify(plain, hashed)
+
+    monkeypatch.setattr(auth_module, "verify_password", spy)
+
+    resp = _fail_login(client)
+    assert resp.status_code == 401
+    assert len(calls) == 1
+    # Real user → its own stored hash is checked, never the dummy.
+    assert calls[0] != auth_module._DUMMY_PW_HASH

@@ -14,6 +14,22 @@ services:
       timeout: 3s
       retries: 10
 
+  # One-shot schema migration job. Runs `alembic upgrade head` to completion
+  # before the backend starts, so migrations are applied exactly once as an
+  # explicit deploy step — not concurrently by every backend replica at boot
+  # (which would race). The Alembic chain is linear (a single head).
+  migrate:
+    build: ./backend
+    restart: "no"
+    environment:
+      ACP_DATABASE_URL: postgresql+psycopg2://acp:${POSTGRES_PASSWORD:-acp-dev-password}@db:5432/access_control
+      ACP_SECRET_KEY: ${ACP_SECRET_KEY:?set ACP_SECRET_KEY in .env}
+      ACP_ENVIRONMENT: ${ACP_ENVIRONMENT:-development}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: alembic upgrade head
+
   backend:
     build: ./backend
     restart: unless-stopped
@@ -33,14 +49,27 @@ services:
       ACP_COOKIE_SECURE: ${ACP_COOKIE_SECURE:-false}
       ACP_FIRST_SUPERUSER_EMAIL: ${ACP_FIRST_SUPERUSER_EMAIL:-admin@example.com}
       ACP_FIRST_SUPERUSER_PASSWORD: ${ACP_FIRST_SUPERUSER_PASSWORD:-admin1234}
+      # Reverse-proxy IPs whose X-Forwarded-For uvicorn honours. Dev default is
+      # "*" for the isolated compose network; a real deployment MUST set this to
+      # the reverse proxy's IP(s) — with ACP_ENVIRONMENT=production the backend
+      # refuses to start if it is "*" (a client could otherwise spoof its IP).
+      ACP_FORWARDED_ALLOW_IPS: ${ACP_FORWARDED_ALLOW_IPS:-*}
     depends_on:
       db:
         condition: service_healthy
+      # Schema is migrated by the one-shot `migrate` job before the app starts.
+      migrate:
+        condition: service_completed_successfully
     # --proxy-headers so the client IP behind nginx is honoured for rate limiting.
+    command: >
+      sh -c "{ [ \"$${ACP_ENVIRONMENT:-development}\" = production ] || python -m app.seed; } &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips '*'"
+    # --proxy-headers so the client IP behind nginx is honoured for rate limiting,
+    # trusting only ACP_FORWARDED_ALLOW_IPS (never a hard-coded "*").
     command: >
       sh -c "alembic upgrade head &&
              { [ \"$${ACP_ENVIRONMENT:-development}\" = production ] || python -m app.seed; } &&
-             uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips '*'"
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips \"$${ACP_FORWARDED_ALLOW_IPS:-127.0.0.1}\""
     ports:
       - "8000:8000"
 

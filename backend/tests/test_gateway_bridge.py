@@ -3,6 +3,7 @@ import pytest
 
 from app.core.config import get_settings
 from app.core.database import SessionLocal
+from app.core.security import hash_token
 from app.models import (
     Controller,
     ControllerStatus,
@@ -17,6 +18,18 @@ from app.models import (
 from app.services import gateway_outbox
 
 HEADER = get_settings().bridge_cert_header
+SECRET_HEADER = get_settings().bridge_secret_header
+# Known per-bridge secret used by the fixtures below (stored only as a hash).
+BRIDGE_SECRET = "test-bridge-secret-abc123"
+BRIDGE_SECRET_HASH = hash_token(BRIDGE_SECRET)
+
+
+def _bhdr(fingerprint="aabbccdd", secret=BRIDGE_SECRET):
+    """Full bridge auth headers: mTLS fingerprint + F-4 shared secret."""
+    headers = {HEADER: fingerprint}
+    if secret is not None:
+        headers[SECRET_HEADER] = secret
+    return headers
 
 
 @pytest.fixture
@@ -29,7 +42,7 @@ def org_a_setup(seeded):
         db.flush()
         bridge = GatewayBridge(
             organization_id=seeded["org_a"], name="Bridge A",
-            cert_fingerprint="aabbccdd", is_active=True,
+            cert_fingerprint="aabbccdd", secret_hash=BRIDGE_SECRET_HASH, is_active=True,
         )
         db.add(bridge)
         db.commit()
@@ -69,6 +82,42 @@ def test_admin_registers_bridge_and_normalizes_fingerprint(client, admin_headers
     assert dup.status_code == 409
 
 
+def test_registration_returns_secret_once_that_authenticates(client, admin_headers):
+    """F-4: registration mints a one-time secret; it (and only it) authenticates."""
+    resp = client.post(
+        "/api/v1/gateway/bridges",
+        json={"name": "Con secreto", "cert_fingerprint": "11:22:33:44"},
+        headers=admin_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    secret = body["secret"]
+    assert secret and len(secret) >= 20
+    # The plaintext secret is never persisted (only its hash).
+    db = SessionLocal()
+    try:
+        bridge = db.query(GatewayBridge).filter_by(cert_fingerprint="11223344").one()
+        assert bridge.secret_hash and bridge.secret_hash != secret
+    finally:
+        db.close()
+
+    client.cookies.clear()  # drop admin cookies so bridge calls are not cookie-auth (CSRF)
+    # The returned secret authenticates a bridge call...
+    ok = client.post(
+        "/api/v1/gateway/commands/claim",
+        json={"worker_token": "w1"},
+        headers=_bhdr("11223344", secret=secret),
+    )
+    assert ok.status_code == 200, ok.text
+    # ...but a wrong secret does not.
+    bad = client.post(
+        "/api/v1/gateway/commands/claim",
+        json={"worker_token": "w1"},
+        headers=_bhdr("11223344", secret=secret + "x"),
+    )
+    assert bad.status_code == 401
+
+
 def test_operator_cannot_register_bridge(client, operator_headers):
     resp = client.post(
         "/api/v1/gateway/bridges",
@@ -88,7 +137,46 @@ def test_claim_rejects_unknown_fingerprint(client, org_a_setup):
     resp = client.post(
         "/api/v1/gateway/commands/claim",
         json={"worker_token": "w1"},
-        headers={HEADER: "deadbeef"},
+        headers=_bhdr("deadbeef"),
+    )
+    assert resp.status_code == 401
+
+
+def test_claim_rejects_valid_fingerprint_without_secret(client, org_a_setup):
+    """F-4 fail-closed: the mTLS fingerprint alone must not authenticate."""
+    resp = client.post(
+        "/api/v1/gateway/commands/claim",
+        json={"worker_token": "w1"},
+        headers={HEADER: "aabbccdd"},  # no secret header
+    )
+    assert resp.status_code == 401
+
+
+def test_claim_rejects_valid_fingerprint_with_wrong_secret(client, org_a_setup):
+    resp = client.post(
+        "/api/v1/gateway/commands/claim",
+        json={"worker_token": "w1"},
+        headers=_bhdr("aabbccdd", secret="not-the-secret"),
+    )
+    assert resp.status_code == 401
+
+
+def test_claim_rejects_bridge_without_stored_secret(client, seeded):
+    """A legacy bridge row with no secret_hash can never authenticate (fail-closed)."""
+    db = SessionLocal()
+    try:
+        db.add(GatewayBridge(
+            organization_id=seeded["org_a"], name="Legacy",
+            cert_fingerprint="cafebabe", secret_hash=None, is_active=True,
+        ))
+        db.commit()
+    finally:
+        db.close()
+    # Even presenting *some* secret cannot satisfy a NULL stored hash.
+    resp = client.post(
+        "/api/v1/gateway/commands/claim",
+        json={"worker_token": "w1"},
+        headers=_bhdr("cafebabe", secret="anything"),
     )
     assert resp.status_code == 401
 
@@ -100,7 +188,7 @@ def test_bridge_claims_and_acks_command(client, org_a_setup):
     claimed = client.post(
         "/api/v1/gateway/commands/claim",
         json={"worker_token": "w1", "limit": 5},
-        headers={HEADER: "AA:BB:CC:DD"},  # normalizes to the registered fingerprint
+        headers=_bhdr("AA:BB:CC:DD"),  # normalizes to the registered fingerprint
     )
     assert claimed.status_code == 200, claimed.text
     body = claimed.json()
@@ -111,7 +199,7 @@ def test_bridge_claims_and_acks_command(client, org_a_setup):
     acked = client.post(
         f"/api/v1/gateway/commands/{command_id}/ack",
         json={"worker_token": "w1", "success": True, "result": {"opened": True}},
-        headers={HEADER: "aabbccdd"},
+        headers=_bhdr(),
     )
     assert acked.status_code == 200
     assert acked.json()["status"] == "succeeded"
@@ -120,7 +208,7 @@ def test_bridge_claims_and_acks_command(client, org_a_setup):
     again = client.post(
         f"/api/v1/gateway/commands/{command_id}/ack",
         json={"worker_token": "w1", "success": False, "error": "late"},
-        headers={HEADER: "aabbccdd"},
+        headers=_bhdr(),
     )
     assert again.status_code == 200
     assert again.json()["status"] == "succeeded"
@@ -130,12 +218,12 @@ def test_ack_wrong_worker_conflicts(client, org_a_setup):
     command_id = _enqueue(org_a_setup["org_a"], org_a_setup["controller_id"])
     client.post(
         "/api/v1/gateway/commands/claim",
-        json={"worker_token": "w1"}, headers={HEADER: "aabbccdd"},
+        json={"worker_token": "w1"}, headers=_bhdr(),
     )
     resp = client.post(
         f"/api/v1/gateway/commands/{command_id}/ack",
         json={"worker_token": "intruder", "success": True},
-        headers={HEADER: "aabbccdd"},
+        headers=_bhdr(),
     )
     assert resp.status_code == 409
 
@@ -169,10 +257,10 @@ def test_ack_open_door_records_remote_open_event(client, org_a_setup):
         org_a_setup["org_a"], org_a_setup["controller_id"], GatewayCommandType.OPEN_DOOR,
         {"door": 1, "door_id": door_id, "requested_by_id": 1}, "open-1",
     )
-    client.post("/api/v1/gateway/commands/claim", json={"worker_token": "w1"}, headers={HEADER: "aabbccdd"})
+    client.post("/api/v1/gateway/commands/claim", json={"worker_token": "w1"}, headers=_bhdr())
     client.post(
         f"/api/v1/gateway/commands/{command_id}/ack",
-        json={"worker_token": "w1", "success": True}, headers={HEADER: "aabbccdd"},
+        json={"worker_token": "w1", "success": True}, headers=_bhdr(),
     )
 
     db = SessionLocal()
@@ -186,7 +274,7 @@ def test_ack_open_door_records_remote_open_event(client, org_a_setup):
     # Re-ack must not double-record (idempotent effect).
     client.post(
         f"/api/v1/gateway/commands/{command_id}/ack",
-        json={"worker_token": "w1", "success": True}, headers={HEADER: "aabbccdd"},
+        json={"worker_token": "w1", "success": True}, headers=_bhdr(),
     )
     db = SessionLocal()
     try:
@@ -199,10 +287,10 @@ def test_ack_ping_updates_controller_status(client, org_a_setup):
     command_id = _enqueue_typed(
         org_a_setup["org_a"], org_a_setup["controller_id"], GatewayCommandType.PING, None, "ping-1",
     )
-    client.post("/api/v1/gateway/commands/claim", json={"worker_token": "w1"}, headers={HEADER: "aabbccdd"})
+    client.post("/api/v1/gateway/commands/claim", json={"worker_token": "w1"}, headers=_bhdr())
     client.post(
         f"/api/v1/gateway/commands/{command_id}/ack",
-        json={"worker_token": "w1", "success": True}, headers={HEADER: "aabbccdd"},
+        json={"worker_token": "w1", "success": True}, headers=_bhdr(),
     )
     db = SessionLocal()
     try:
@@ -229,7 +317,7 @@ def test_bridge_cannot_touch_other_org_commands(client, org_a_setup):
     # org A's bridge claims: sees nothing from org B.
     claimed = client.post(
         "/api/v1/gateway/commands/claim",
-        json={"worker_token": "w1"}, headers={HEADER: "aabbccdd"},
+        json={"worker_token": "w1"}, headers=_bhdr(),
     )
     assert claimed.status_code == 200
     assert claimed.json() == []
@@ -238,7 +326,7 @@ def test_bridge_cannot_touch_other_org_commands(client, org_a_setup):
     resp = client.post(
         f"/api/v1/gateway/commands/{other_command}/ack",
         json={"worker_token": "w1", "success": True},
-        headers={HEADER: "aabbccdd"},
+        headers=_bhdr(),
     )
     assert resp.status_code == 404
 
@@ -265,7 +353,8 @@ def test_dual_approval_via_bridge(client, admin_headers, operator_headers, seede
         try:
             assert db.query(Event).filter_by(type=EventType.REMOTE_OPEN).count() == 0
             bridge = GatewayBridge(
-                organization_id=seeded["org_a"], name="B", cert_fingerprint="aabbccdd", is_active=True
+                organization_id=seeded["org_a"], name="B", cert_fingerprint="aabbccdd",
+                secret_hash=BRIDGE_SECRET_HASH, is_active=True,
             )
             db.add(bridge)
             db.commit()
@@ -274,14 +363,14 @@ def test_dual_approval_via_bridge(client, admin_headers, operator_headers, seede
 
         client.cookies.clear()  # drop admin cookies so bridge calls are not cookie-auth
         claimed = client.post(
-            "/api/v1/gateway/commands/claim", json={"worker_token": "w1"}, headers={HEADER: "aabbccdd"}
+            "/api/v1/gateway/commands/claim", json={"worker_token": "w1"}, headers=_bhdr()
         ).json()
         assert len(claimed) == 1
         cmd_id = claimed[0]["id"]
 
         client.post(
             f"/api/v1/gateway/commands/{cmd_id}/ack",
-            json={"worker_token": "w1", "success": True}, headers={HEADER: "aabbccdd"},
+            json={"worker_token": "w1", "success": True}, headers=_bhdr(),
         )
 
         db = SessionLocal()
@@ -313,23 +402,24 @@ def test_dual_approval_via_bridge_failure_marks_failed(
         db = SessionLocal()
         try:
             db.add(GatewayBridge(organization_id=seeded["org_a"], name="B",
-                                 cert_fingerprint="aabbccdd", is_active=True))
+                                 cert_fingerprint="aabbccdd", secret_hash=BRIDGE_SECRET_HASH,
+                                 is_active=True))
             db.commit()
         finally:
             db.close()
         client.cookies.clear()
         cmd_id = client.post(
-            "/api/v1/gateway/commands/claim", json={"worker_token": "w1"}, headers={HEADER: "aabbccdd"}
+            "/api/v1/gateway/commands/claim", json={"worker_token": "w1"}, headers=_bhdr()
         ).json()[0]["id"]
         # Exhaust retries so the command reaches FAILED (default max_attempts 5).
         for _ in range(6):
             client.post(
                 f"/api/v1/gateway/commands/{cmd_id}/ack",
                 json={"worker_token": "w1", "success": False, "error": "board offline"},
-                headers={HEADER: "aabbccdd"},
+                headers=_bhdr(),
             )
             client.post(
-                "/api/v1/gateway/commands/claim", json={"worker_token": "w1"}, headers={HEADER: "aabbccdd"}
+                "/api/v1/gateway/commands/claim", json={"worker_token": "w1"}, headers=_bhdr()
             )
         db = SessionLocal()
         try:
@@ -347,7 +437,7 @@ def test_inbox_ingests_masks_and_deduplicates(client, org_a_setup):
         "controller_id": org_a_setup["controller_id"],
         "card_number": "12345678", "message": "denied at door",
     }
-    resp = client.post("/api/v1/gateway/events", json={"events": [ev]}, headers={HEADER: "aabbccdd"})
+    resp = client.post("/api/v1/gateway/events", json={"events": [ev]}, headers=_bhdr())
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["accepted"] == 1 and body["duplicates"] == 0 and body["errors"] == []
@@ -363,7 +453,7 @@ def test_inbox_ingests_masks_and_deduplicates(client, org_a_setup):
         db.close()
 
     # Re-sending the same event_uid is a no-op (idempotent).
-    again = client.post("/api/v1/gateway/events", json={"events": [ev]}, headers={HEADER: "aabbccdd"}).json()
+    again = client.post("/api/v1/gateway/events", json={"events": [ev]}, headers=_bhdr()).json()
     assert again["duplicates"] == 1 and again["accepted"] == 0
     db = SessionLocal()
     try:
@@ -377,7 +467,7 @@ def test_inbox_reports_unknown_controller_and_type(client, org_a_setup):
         {"event_uid": "a", "type": "alarm", "controller_id": 999999},          # unknown controller
         {"event_uid": "b", "type": "not_a_type", "controller_id": org_a_setup["controller_id"]},
     ]
-    body = client.post("/api/v1/gateway/events", json={"events": events}, headers={HEADER: "aabbccdd"}).json()
+    body = client.post("/api/v1/gateway/events", json={"events": events}, headers=_bhdr()).json()
     assert body["accepted"] == 0
     reasons = [e["reason"] for e in body["errors"]]
     assert any("unknown controller" in r for r in reasons)
@@ -390,3 +480,41 @@ def test_inbox_requires_bridge_auth(client, org_a_setup):
         json={"events": [{"event_uid": "x", "type": "alarm", "controller_id": org_a_setup["controller_id"]}]},
     )
     assert resp.status_code == 401
+
+
+def test_inbox_concurrent_conflict_counts_as_duplicate(client, org_a_setup, monkeypatch):
+    """F-10: a racing insert of the same event_uid (unique external_id) must be
+    counted as a duplicate for that row, not fail the whole batch. Simulated by
+    making the first record_event raise IntegrityError (as another worker would
+    at flush time)."""
+    from sqlalchemy.exc import IntegrityError
+
+    from app.services import gateway_inbox
+
+    real = gateway_inbox.record_event
+    calls = {"n": 0}
+
+    def flaky(db, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise IntegrityError("duplicate external_id", None, Exception("unique violation"))
+        return real(db, **kwargs)
+
+    monkeypatch.setattr(gateway_inbox, "record_event", flaky)
+    events = [
+        {"event_uid": "conc-1", "type": "alarm", "controller_id": org_a_setup["controller_id"]},
+        {"event_uid": "conc-2", "type": "alarm", "controller_id": org_a_setup["controller_id"]},
+    ]
+    resp = client.post("/api/v1/gateway/events", json={"events": events}, headers={HEADER: "aabbccdd"})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["accepted"] == 1  # the second event
+    assert body["duplicates"] == 1  # the "racing" first event
+    assert body["errors"] == []
+    # Exactly the surviving event is stored.
+    db = SessionLocal()
+    try:
+        assert db.query(Event).filter_by(external_id="conc-2").count() == 1
+        assert db.query(Event).filter_by(external_id="conc-1").count() == 0
+    finally:
+        db.close()

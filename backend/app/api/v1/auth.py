@@ -4,7 +4,7 @@ from typing import Annotated
 import jwt as pyjwt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.core.config import get_settings
 from app.core.cookies import (
@@ -41,11 +41,52 @@ settings = get_settings()
 
 _bearer = HTTPBearer(auto_error=False)
 
+# F-8: a fixed bcrypt hash used to equalize login timing when the email does not
+# exist. Without it, a missing user skips ``verify_password`` and returns much
+# faster than a real user whose password is checked, letting an attacker
+# enumerate registered emails by response time. We run the same bcrypt work
+# against this dummy and discard the result. Computed once at import.
+_DUMMY_PW_HASH = hash_password("acp-login-timing-equalizer")
+
 
 def _as_utc(dt: datetime | None) -> datetime | None:
     if dt is None:
         return None
     return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+
+
+def _register_failed_login(db, user: User, now: datetime, request: Request) -> None:
+    """Count a failed login and lock the account at the threshold — atomically.
+
+    F-1: the counter is bumped with a single ``UPDATE ... SET failed_login_count
+    = failed_login_count + 1`` (evaluated under the row lock), not a Python
+    read-modify-write, so concurrent failed attempts cannot lose increments and
+    slip past the lockout threshold. The DB is the source of truth for the count.
+    """
+    new_count = db.execute(
+        update(User)
+        .where(User.id == user.id)
+        .values(failed_login_count=User.failed_login_count + 1)
+        .returning(User.failed_login_count)
+        .execution_options(synchronize_session=False)
+    ).scalar_one()
+    if new_count >= settings.login_max_attempts:
+        db.execute(
+            update(User)
+            .where(User.id == user.id)
+            .values(
+                locked_until=now + timedelta(minutes=settings.login_lockout_minutes),
+                failed_login_count=0,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        record_audit(
+            db, user=user, action="account_locked", resource_type="user",
+            resource_id=user.id, request=request,
+            details={"lockout_minutes": settings.login_lockout_minutes},
+        )
+    db.expire(user)  # ORM copy is stale after the Core UPDATE(s)
+    db.commit()
 
 
 @router.post("/login", response_model=TokenPair, dependencies=[Depends(rate_limit_auth)])
@@ -60,19 +101,17 @@ def login(body: LoginRequest, db: DbSession, request: Request, response: Respons
             "Account temporarily locked after repeated failed logins. Try again later.",
         )
 
-    if user is None or not verify_password(body.password, user.hashed_password):
+    # F-8: always run exactly one bcrypt verification, even when the email does
+    # not exist, against a dummy hash. Otherwise a missing user short-circuits
+    # ``verify_password`` and returns far faster than a real user, letting an
+    # attacker enumerate registered emails by response time. The dummy result is
+    # discarded — a missing user still fails below.
+    password_ok = verify_password(body.password, user.hashed_password if user else _DUMMY_PW_HASH)
+
+    if user is None or not password_ok:
         # Count the failure and lock the account once the threshold is reached.
         if user is not None:
-            user.failed_login_count += 1
-            if user.failed_login_count >= settings.login_max_attempts:
-                user.locked_until = now + timedelta(minutes=settings.login_lockout_minutes)
-                user.failed_login_count = 0
-                record_audit(
-                    db, user=user, action="account_locked", resource_type="user",
-                    resource_id=user.id, request=request,
-                    details={"lockout_minutes": settings.login_lockout_minutes},
-                )
-            db.commit()
+            _register_failed_login(db, user, now, request)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Incorrect email or password")
 
     if not user.is_active:
@@ -98,6 +137,8 @@ def login(body: LoginRequest, db: DbSession, request: Request, response: Respons
                 user.locked_until = now + timedelta(minutes=settings.login_lockout_minutes)
                 user.failed_login_count = 0
             db.commit()
+        if not verify_code(user.mfa_secret, body.mfa_code):
+            _register_failed_login(db, user, now, request)
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid MFA code")
         if recovery_ok:
             record_audit(
