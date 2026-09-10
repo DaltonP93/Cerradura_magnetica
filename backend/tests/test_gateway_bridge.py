@@ -480,3 +480,41 @@ def test_inbox_requires_bridge_auth(client, org_a_setup):
         json={"events": [{"event_uid": "x", "type": "alarm", "controller_id": org_a_setup["controller_id"]}]},
     )
     assert resp.status_code == 401
+
+
+def test_inbox_concurrent_conflict_counts_as_duplicate(client, org_a_setup, monkeypatch):
+    """F-10: a racing insert of the same event_uid (unique external_id) must be
+    counted as a duplicate for that row, not fail the whole batch. Simulated by
+    making the first record_event raise IntegrityError (as another worker would
+    at flush time)."""
+    from sqlalchemy.exc import IntegrityError
+
+    from app.services import gateway_inbox
+
+    real = gateway_inbox.record_event
+    calls = {"n": 0}
+
+    def flaky(db, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise IntegrityError("duplicate external_id", None, Exception("unique violation"))
+        return real(db, **kwargs)
+
+    monkeypatch.setattr(gateway_inbox, "record_event", flaky)
+    events = [
+        {"event_uid": "conc-1", "type": "alarm", "controller_id": org_a_setup["controller_id"]},
+        {"event_uid": "conc-2", "type": "alarm", "controller_id": org_a_setup["controller_id"]},
+    ]
+    resp = client.post("/api/v1/gateway/events", json={"events": events}, headers={HEADER: "aabbccdd"})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["accepted"] == 1  # the second event
+    assert body["duplicates"] == 1  # the "racing" first event
+    assert body["errors"] == []
+    # Exactly the surviving event is stored.
+    db = SessionLocal()
+    try:
+        assert db.query(Event).filter_by(external_id="conc-2").count() == 1
+        assert db.query(Event).filter_by(external_id="conc-1").count() == 0
+    finally:
+        db.close()
