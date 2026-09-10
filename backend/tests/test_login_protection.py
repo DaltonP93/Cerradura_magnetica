@@ -94,3 +94,52 @@ def test_auth_rate_limit_throttles_by_ip(client, seeded):
     finally:
         auth_limiter.limit = 0
         auth_limiter.reset()
+
+
+def test_missing_email_still_runs_one_password_verification(client, seeded, monkeypatch):
+    """F-8: an unregistered email must still trigger exactly one bcrypt check.
+
+    Otherwise a missing user short-circuits ``verify_password`` and answers far
+    faster than a real user, leaking which emails are registered by timing.
+    """
+    import app.api.v1.auth as auth_module
+
+    calls: list[str] = []
+    real_verify = auth_module.verify_password
+
+    def spy(plain, hashed):
+        calls.append(hashed)
+        return real_verify(plain, hashed)
+
+    monkeypatch.setattr(auth_module, "verify_password", spy)
+
+    resp = client.post(
+        "/api/v1/auth/login",
+        json={"email": "does-not-exist@test.com", "password": "whatever"},
+    )
+    # Generic 401 (no user-enumeration signal in the body) ...
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "Incorrect email or password"
+    # ... and the bcrypt work ran exactly once, against the dummy hash.
+    assert len(calls) == 1
+    assert calls[0] == auth_module._DUMMY_PW_HASH
+
+
+def test_wrong_password_runs_one_verification_against_real_hash(client, seeded, monkeypatch):
+    """A registered email with a bad password also runs a single real check."""
+    import app.api.v1.auth as auth_module
+
+    calls: list[str] = []
+    real_verify = auth_module.verify_password
+
+    def spy(plain, hashed):
+        calls.append(hashed)
+        return real_verify(plain, hashed)
+
+    monkeypatch.setattr(auth_module, "verify_password", spy)
+
+    resp = _fail_login(client)
+    assert resp.status_code == 401
+    assert len(calls) == 1
+    # Real user → its own stored hash is checked, never the dummy.
+    assert calls[0] != auth_module._DUMMY_PW_HASH

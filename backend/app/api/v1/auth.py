@@ -39,6 +39,13 @@ settings = get_settings()
 
 _bearer = HTTPBearer(auto_error=False)
 
+# F-8: a fixed bcrypt hash used to equalize login timing when the email does not
+# exist. Without it, a missing user skips ``verify_password`` and returns much
+# faster than a real user whose password is checked, letting an attacker
+# enumerate registered emails by response time. We run the same bcrypt work
+# against this dummy and discard the result. Computed once at import.
+_DUMMY_PW_HASH = hash_password("acp-login-timing-equalizer")
+
 
 def _as_utc(dt: datetime | None) -> datetime | None:
     if dt is None:
@@ -58,7 +65,14 @@ def login(body: LoginRequest, db: DbSession, request: Request, response: Respons
             "Account temporarily locked after repeated failed logins. Try again later.",
         )
 
-    if user is None or not verify_password(body.password, user.hashed_password):
+    # F-8: always run exactly one bcrypt verification, even when the email does
+    # not exist, against a dummy hash. Otherwise a missing user short-circuits
+    # ``verify_password`` and returns far faster than a real user, letting an
+    # attacker enumerate registered emails by response time. The dummy result is
+    # discarded — a missing user still fails below.
+    password_ok = verify_password(body.password, user.hashed_password if user else _DUMMY_PW_HASH)
+
+    if user is None or not password_ok:
         # Count the failure and lock the account once the threshold is reached.
         if user is not None:
             user.failed_login_count += 1
