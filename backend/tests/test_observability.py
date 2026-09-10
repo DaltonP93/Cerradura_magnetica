@@ -36,12 +36,30 @@ def test_metrics_token_gate(client):
     settings.metrics_token = "s3cret"
     try:
         assert client.get("/metrics").status_code == 401
+        # F-7: a wrong token is rejected (constant-time compare).
+        assert client.get("/metrics", headers={"Authorization": "Bearer nope"}).status_code == 401
+        assert client.get("/metrics", headers={"X-Metrics-Token": "nope"}).status_code == 401
         ok = client.get("/metrics", headers={"Authorization": "Bearer s3cret"})
         assert ok.status_code == 200
         ok2 = client.get("/metrics", headers={"X-Metrics-Token": "s3cret"})
         assert ok2.status_code == 200
     finally:
         settings.metrics_token = original
+
+
+# --- F-7: production warning when /metrics is ungated ---
+def test_metrics_warning_only_in_production_without_token():
+    from app.core.config import Settings
+    from app.main import _warn_if_metrics_unprotected
+
+    prod = {
+        "environment": "production", "secret_key": "k" * 40,
+        "first_superuser_password": "a-unique-strong-password",
+        "debug": False, "cookie_secure": True,
+    }
+    assert _warn_if_metrics_unprotected(Settings(**prod)) is True                       # prod, no token → warn
+    assert _warn_if_metrics_unprotected(Settings(**prod, metrics_token="t")) is False   # prod + token → no warn
+    assert _warn_if_metrics_unprotected(Settings(environment="development")) is False   # dev → no warn
 
 
 # --- Audit correlation ---
