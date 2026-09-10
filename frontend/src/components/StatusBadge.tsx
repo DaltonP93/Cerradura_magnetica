@@ -9,9 +9,18 @@ const TONE_CLASSES: Record<Tone, string> = {
   sky: 'bg-sky-500/15 text-sky-300 ring-sky-500/30',
 };
 
-export function Badge({ tone, children }: { tone: Tone; children: React.ReactNode }) {
+export function Badge({
+  tone,
+  children,
+  title,
+}: {
+  tone: Tone;
+  children: React.ReactNode;
+  title?: string;
+}) {
   return (
     <span
+      title={title}
       className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${TONE_CLASSES[tone]}`}
     >
       {children}

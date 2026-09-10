@@ -56,8 +56,9 @@ def apply_outcome(db: Session, *, command: GatewayCommand, success: bool) -> Non
                 message=f"Controller {controller.name} is {controller.status.value}",
                 controller_id=controller.id,
             )
-    # SYNC_TIME / SYNC_PERMISSIONS carry no extra platform effect (already audited
-    # at enqueue); their completion is recorded on the command row itself.
+    # SYNC_TIME / SYNC_PERMISSIONS / REVOKE_CARD carry no extra platform effect
+    # (the DB already reflects the revocation, audited at enqueue); their
+    # completion is recorded on the command row itself.
 
 
 def _finalize_dual_approval(

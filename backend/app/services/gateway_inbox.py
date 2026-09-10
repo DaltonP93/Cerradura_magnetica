@@ -11,6 +11,7 @@ other, once the transaction commits.
 from collections.abc import Sequence
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.masking import mask_card
@@ -85,18 +86,29 @@ def ingest_events(db: Session, *, organization_id: int, events: Sequence) -> dic
         if e.card_number:
             details["card"] = mask_card(e.card_number)  # never store the raw card
 
-        record_event(
-            db,
-            organization_id=organization_id,
-            type=event_type,
-            message=e.message or f"{event_type.value} reported by board",
-            controller_id=controller_id,
-            door_id=door_id,
-            cardholder_id=cardholder_id,
-            details=details,
-            external_id=e.event_uid,
-            occurred_at=e.occurred_at,
-        )
+        # F-10: isolate each insert in a savepoint. If another worker committed
+        # the same event_uid between our pre-check and this flush, the unique
+        # constraint on external_id raises IntegrityError for THIS event only —
+        # count it as a duplicate instead of failing the whole batch. The
+        # deferred broadcast is queued only after a successful flush, so the
+        # savepoint rollback leaves no phantom event.
+        try:
+            with db.begin_nested():
+                record_event(
+                    db,
+                    organization_id=organization_id,
+                    type=event_type,
+                    message=e.message or f"{event_type.value} reported by board",
+                    controller_id=controller_id,
+                    door_id=door_id,
+                    cardholder_id=cardholder_id,
+                    details=details,
+                    external_id=e.event_uid,
+                    occurred_at=e.occurred_at,
+                )
+        except IntegrityError:
+            duplicates += 1
+            continue
         seen.add(e.event_uid)
         accepted += 1
 

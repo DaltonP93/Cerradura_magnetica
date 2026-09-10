@@ -18,6 +18,7 @@ const NAV_SECTIONS: { title: string; items: NavItem[] }[] = [
     items: [
       { to: '/', label: 'Panel', icon: '📊' },
       { to: '/monitoreo', label: 'Monitoreo en vivo', icon: '📡' },
+      { to: '/aprobaciones', label: 'Aprobaciones', icon: '✅' },
       { to: '/reportes', label: 'Reportes de eventos', icon: '📄' },
     ],
   },
