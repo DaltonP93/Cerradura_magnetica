@@ -12,13 +12,20 @@
 > ítems `NO_VERIFICADO` de la primera tanda: IDOR endpoint-por-endpoint, doble
 > aprobación bajo carrera y fuga en logs fueron verificados.
 
-> **🔄 Actualización 2026-09-07 — cola de fixes (Draft, CI verde, sin fusionar).**
-> Corregidos: **F-1** (#12), **F-2** (#11), **F-3** (#14), **F-4** (#13). Riesgos
-> operacionales cerrados a nivel software: **R-1** rate-limit + revocación WS →
-> Redis opt-in (#17 rate-limit, #19 Pub/Sub revocación); **R-2** revocación→placa
-> (#16); **R-4** pip-audit (#15); migraciones-como-job (#20). Pendientes sin PR:
-> **F-5** (P2) y **F-6…F-11** (P3); enforcement de flags (R-3, requiere hardware);
-> UI de MFA. Ver `IMPLEMENTATION_STATUS.md` §"Camino a operativo 100%".
+> **🔄 Actualización 2026-09-10 — cola de fixes de auditoría COMPLETA (Draft, sin fusionar).**
+> **Los 11 hallazgos F-1…F-11 tienen PR**: F-1 (#12), F-2 (#11), F-3 (#14),
+> F-4 (#13), **F-5 (#27)**, F-6 (#21), **F-7 (#23)**, **F-8 (#26)**, **F-9 (#22)**,
+> **F-10 (#24)**, **F-11 (#25)** — cada uno en rama aislada con tests. CI verde
+> verificado por check runs en F-1…F-4, F-6…F-11 (#26 F-8 verde; #27 F-5 en
+> verificación al registrar). Riesgos operacionales cerrados a nivel software:
+> **R-1** rate-limit + revocación WS → Redis opt-in (#17 rate-limit, #19 Pub/Sub
+> revocación); **R-2** revocación→placa (#16); **R-4** pip-audit (#15);
+> migraciones-como-job (#20). **Residuales documentados** (no bloqueantes de los
+> P3): 409 de unicidad global email/serial (F-8, requiere unicidad por-tenant);
+> reset de MFA por admin (F-5, follow-up además de los recovery codes).
+> **Pendiente real:** enforcement de flags (R-3, requiere hardware) e integración
+> ordenada a `claude/develop` (requiere autorización para fusionar).
+> Ver `IMPLEMENTATION_STATUS.md` §"Camino a operativo 100%".
 
 ## Invariantes (única sede canónica; el resto de docs enlaza aquí)
 
@@ -106,18 +113,20 @@ auditoría (con 2 matices: F-2 y F-6).
 | F-2 | P2 | `--forwarded-allow-ips *`: confía en `X-Forwarded-For` de cualquier peer → bypass rate-limit por IP + IP falsificable en auditoría/sesión | `backend/Dockerfile`; `core/ratelimit.py`, `services/audit.py`, `services/sessions.py` | ✅ **PR #11 (abierto):** `forwarded_allow_ips` configurable (default `127.0.0.1`), producción rechaza `*` (fail-fast); Dockerfile/compose sin `*` literal |
 | F-3 | P2 | WebSocket sin verificación de `Origin` → CSWSH si `ACP_COOKIE_SAMESITE=none` | `api/v1/ws.py::events_ws` | ✅ **PR #14 (abierto):** `Origin` presente debe estar en `cors_origin_list` (rechazo 1008 antes de autenticar); `Origin` ausente = cliente no-navegador (sin cookie ambiental) permitido; tests cross-origin/allowlist |
 | F-4 | P2 | Confianza ciega en el header de fingerprint del bridge (no es secreto) → suplantación si el edge no strippea el header | `api/v1/gateway_bridge.py::get_current_bridge` | ✅ **PR #13 (abierto):** secreto por-bridge (token `urlsafe(32)` emitido al registrar, guardado hasheado y devuelto una vez) verificado en tiempo constante además del fingerprint; `secret_hash` NULL no autentica (fail-closed) + tests negativos |
-| F-5 | P2 | MFA sin códigos de recuperación ni reset por admin → lockout permanente ante pérdida del TOTP | `api/v1/auth.py`, `schemas/auth.py` (UserUpdate sin campos mfa) | Recovery codes de un uso (hasheados) y/o endpoint de reset admin auditado |
+| F-5 | P2 | MFA sin códigos de recuperación ni reset por admin → lockout permanente ante pérdida del TOTP | `api/v1/auth.py`, `schemas/auth.py` | ✅ **PR #27 (abierto):** recovery codes de un uso (10, hasheados SHA-256 en `users.mfa_recovery_hashes`), emitidos una vez en `enable`/`recovery-codes`, consumidos en login cuando falla el TOTP; migración `c5d6e7f8a9b0` (head único); 7 tests. **Reset admin auditado = follow-up** documentado |
 | F-6 | P3 | Nº de tarjeta en claro en errores del importador (inconsistente con masking) | `services/importer.py::_build_plan` | ✅ **PR #21 (abierto):** `mask_card()` en ambos mensajes ("already assigned" / "duplicated"); tests afirman nº en claro ausente y `*0001` presente (cubre CSV y MDB) |
-| F-7 | P3 | `/metrics` abierto por defecto (no en `production_issues`) + compare no constante | `main.py::prometheus_metrics`, `core/config.py` | Exigir token en prod; `secrets.compare_digest` |
-| F-8 | P3 | Enumeración de usuarios/tenants (timing bcrypt; 409 de unicidad global de email/serial) | `api/v1/auth.py::login`, `users.py`, `controllers.py` | Hash dummy en tiempo constante; 409 genéricos |
-| F-9 | P3 | `get_or_404` con fallback `getattr(obj,"organization_id",org_id)` → IDOR latente para futuros modelos sin `organization_id` | `api/helpers.py::get_or_404` | Requerir el atributo; fallar-cerrado |
-| F-10 | P3 | Inbox: duplicado concurrente del mismo `event_uid` rompe el lote entero (sin manejo de IntegrityError por-fila) | `services/gateway_inbox.py::ingest_events` | `INSERT ... ON CONFLICT DO NOTHING` o savepoints por evento |
-| F-11 | P3 | Apertura remota no idempotente ante doble-submit (modo bridge): `uuid4` por llamada → doble apertura | `services/command_dispatch.py::enqueue_command` | Aceptar `Idempotency-Key` del cliente como clave del outbox |
+| F-7 | P3 | `/metrics` abierto por defecto (no en `production_issues`) + compare no constante | `main.py::prometheus_metrics`, `core/config.py` | ✅ **PR #23 (abierto):** `secrets.compare_digest` en el compare del token; aviso al arrancar en producción si `/metrics` queda sin token (`_warn_if_metrics_unprotected`); tests |
+| F-8 | P3 | Enumeración de usuarios/tenants (timing bcrypt; 409 de unicidad global de email/serial) | `api/v1/auth.py::login`, `users.py`, `controllers.py` | ✅ **PR #26 (abierto):** verificación bcrypt siempre (hash dummy fijo cuando el email no existe) → tiempo constante; 401 genérico intacto; tests con spy. **409 de unicidad global = residual** (requiere unicidad por-tenant) |
+| F-9 | P3 | `get_or_404` con fallback `getattr(obj,"organization_id",org_id)` → IDOR latente para futuros modelos sin `organization_id` | `api/helpers.py::get_or_404` | ✅ **PR #22 (abierto):** exige el atributo `organization_id` cuando se pasa `org_id`; ausente → `RuntimeError` (fail-closed, nunca degrada a saltarse el scope); 4 tests |
+| F-10 | P3 | Inbox: duplicado concurrente del mismo `event_uid` rompe el lote entero (sin manejo de IntegrityError por-fila) | `services/gateway_inbox.py::ingest_events` | ✅ **PR #24 (abierto):** `record_event` por-fila en savepoint (`begin_nested`); `IntegrityError` → cuenta como duplicado y continúa; broadcast diferido solo tras flush OK; test de conflicto concurrente |
+| F-11 | P3 | Apertura remota no idempotente ante doble-submit (modo bridge): `uuid4` por llamada → doble apertura | `services/command_dispatch.py::enqueue_command` | ✅ **PR #25 (abierto):** `enqueue_command` acepta `idempotency_key`; `open_door` usa el header `Idempotency-Key` del cliente como clave del outbox; 2 tests (colapsa doble-submit / sin clave = 2 comandos) |
 
 > Prioridad de PRs sugerida por la auditoría: **F-2 y F-1** primero (habilitan
 > fuerza bruta combinada), luego F-4 y F-3, luego F-5 (disponibilidad), y los P3
-> como higiene. **Ninguno se corrige en el PR documental (#8);** cada uno va en su
-> propia rama con tests. **Informe completo versionado:** [`docs/audits/SECURITY_AUDIT_2026-09-06.md`](audits/SECURITY_AUDIT_2026-09-06.md).
+> como higiene. **Estado 2026-09-10: los 11 hallazgos están resueltos en PRs Draft
+> aislados con tests** (ver la columna "Estado/PR" arriba). **Ninguno se corrige
+> en el PR documental (#8);** cada uno va en su propia rama. **Informe completo
+> versionado:** [`docs/audits/SECURITY_AUDIT_2026-09-06.md`](audits/SECURITY_AUDIT_2026-09-06.md).
 
 ## Riesgos abiertos priorizados (operacionales / funcionales)
 

@@ -30,11 +30,14 @@
 > | #18 | **P0-2 / DOOR-005 / UI-002-dual** | sin UI de doble aprobación → página Aprobaciones + toggle en el editor + infra Vitest |
 > | #19 | **P1-1 / R-1 (revocación)** | revocación WS intra-proceso → fan-out Redis Pub/Sub opt-in (revalidación BD sigue de red) |
 > | #20 | **P1-2** | migraciones en el arranque del backend → servicio one-shot `migrate` en compose |
+> | #21–#27 | **F-6, F-9, F-7, F-10, F-11, F-8, F-5** | 2ª tanda de la auditoría: los 7 hallazgos restantes, un PR aislado con tests cada uno |
 >
-> **Aún pendientes** tras esta cola: F-5, F-6, F-7, F-8, F-9, F-10, F-11 (seguridad
-> P2/P3, sin PR); enforcement real de flags (P0-1, requiere hardware); UI de MFA
-> (P1-4); turnos nocturnos (P1-5); y todo lo `BLOCKED_HARDWARE`/`BLOCKED_SPEC`.
-> Ver la sección final **"Camino a operativo 100%"**.
+> **Cola de auditoría COMPLETA (2026-09-10):** los 11 hallazgos F-1…F-11 tienen PR
+> Draft con tests. **Aún pendientes** (no de la auditoría de código): enforcement
+> real de flags (P0-1, requiere hardware); UI de MFA (P1-4, backend con recovery
+> codes ya en #27); turnos nocturnos (P1-5); residuales documentados (409 de
+> unicidad global — F-8; reset admin de MFA — F-5); y todo lo
+> `BLOCKED_HARDWARE`/`BLOCKED_SPEC`. Ver la sección final **"Camino a operativo 100%"**.
 > ---
 
 ## Taxonomía de estados
@@ -175,8 +178,12 @@
 
 La auditoría independiente arrojó **0 P0, 0 P1, 5 P2, 6 P3** (F-1…F-11 en `SECURITY.md`).
 **Corregidos (PRs abiertos, CI verde):** F-1 (#12), F-2 (#11), F-3 (#14), F-4 (#13).
-**Corregidos (2ª tanda, PRs abiertos):** F-6 (#21).
-**Pendientes (sin PR):** F-5 (MFA recovery/reset — P2), F-7 (`/metrics` abierto + compare no constante — P3), F-8 (enumeración de usuarios/tenants — P3), F-9 (`get_or_404` IDOR latente — P3), F-10 (inbox: IntegrityError por-fila — P3), F-11 (apertura remota no idempotente por `Idempotency-Key` — P3).
+**Corregidos — cola COMPLETA (PRs Draft abiertos con tests):** F-1 (#12), F-2 (#11),
+F-3 (#14), F-4 (#13), F-5 (#27), F-6 (#21), F-7 (#23), F-8 (#26), F-9 (#22),
+F-10 (#24), F-11 (#25). **No queda ningún hallazgo de la auditoría sin PR.**
+**Residuales documentados** (no bloqueantes de los P3): 409 de unicidad global de
+email/serial (F-8 — requiere unicidad por-tenant + migración); reset de MFA por
+admin auditado (F-5 — follow-up además de los recovery codes de #27).
 
 Ver `AI_HANDOFF.md` para el índice maestro y `REQUIREMENTS_TRACEABILITY.md` para la matriz completa de requisitos.
 
@@ -206,15 +213,16 @@ Ver `AI_HANDOFF.md` para el índice maestro y `REQUIREMENTS_TRACEABILITY.md` par
 ### C. Funcionalidad de producto faltante
 - [~] UI de doble aprobación — **PR #18** (falta integrar).
 - [~] Propagación de revocación a la placa — **PR #16** (falta integrar; efecto físico depende de hardware).
-- [ ] **UI de MFA/TOTP** (P1-4): activar/usar/deshabilitar desde el SPA + (F-5) recovery codes / reset por admin.
+- [ ] **UI de MFA/TOTP** (P1-4): activar/usar/deshabilitar desde el SPA (el backend, incl. recovery codes de F-5 #27, ya existe; falta la UI).
 - [ ] **Turnos nocturnos** en asistencia (P1-5).
 - [ ] Dry-run de importación en el SPA (P2-1); export CSV server-side completo (P2-2).
 - [ ] i18n (P3-4); tests **E2E** de frontend (P3-5).
 
-### D. Seguridad restante (auditoría F-1…F-11)
-- [~] F-1/F-2/F-3/F-4 — PRs #12/#11/#14/#13 (falta integrar).
-- [ ] **F-5** (P2): MFA recovery codes / reset admin.
-- [ ] **F-6, F-7, F-8, F-9, F-10, F-11** (P3): higiene (ver `SECURITY.md`).
+### D. Seguridad de la auditoría (F-1…F-11) — **cola COMPLETA**
+- [~] **Todos** en PR Draft con tests (falta integrar a `develop` + autorización para fusionar):
+  F-1 #12 · F-2 #11 · F-3 #14 · F-4 #13 · F-5 #27 · F-6 #21 · F-7 #23 · F-8 #26 ·
+  F-9 #22 · F-10 #24 · F-11 #25.
+- [ ] **Residuales documentados** (no bloqueantes): 409 de unicidad global email/serial (F-8, requiere unicidad por-tenant); reset admin de MFA (F-5, además de recovery codes).
 - [ ] Re-verificar los requisitos aún `OPEN_PR_UNVERIFIED` (AUTH-003 CSRF/fallback WS, AUTH-004) tras integrar los fixes.
 
 ### E. Operación / despliegue
