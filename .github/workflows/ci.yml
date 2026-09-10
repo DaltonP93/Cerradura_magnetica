@@ -22,6 +22,11 @@ jobs:
         run: pip install -r requirements-dev.txt
       - name: Lint (ruff) — whole backend incl. migrations and alembic/env.py
         run: ruff check .
+      - name: Audit production dependencies (pip-audit)
+        # Python counterpart of the frontend's `npm audit --omit=dev`: audits the
+        # resolved production requirements against the PyPI advisory DB. Dev-only
+        # tooling (pytest, ruff, pip-audit) is intentionally excluded.
+        run: pip-audit -r requirements.txt --progress-spinner off
       - name: Verify a single Alembic head (no divergent branches)
         run: |
           heads=$(alembic heads | grep -c '(head)')
