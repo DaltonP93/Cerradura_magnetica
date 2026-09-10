@@ -32,9 +32,9 @@ from app.schemas.auth import (
     UserOut,
 )
 from app.schemas.common import Message
+from app.services import revocation_bus, sessions
 from app.services import mfa_recovery, sessions
 from app.services.audit import record_audit
-from app.services.events import manager
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 settings = get_settings()
@@ -191,7 +191,7 @@ def refresh(body: RefreshRequest, db: DbSession, request: Request, response: Res
             )
         db.commit()  # persist any family revocation triggered above
         if exc.session_id:
-            manager.close_session(exc.session_id)  # tear down live sockets on reuse
+            revocation_bus.revoke_session(exc.session_id)  # tear down live sockets on reuse
         # A rejected refresh clears the browser's stale cookies.
         clear_auth_cookies(response)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, exc.message) from exc
@@ -224,7 +224,7 @@ def logout(
                     resource_id=session.session_id,
                 )
                 db.commit()
-                manager.close_session(session.session_id)
+                revocation_bus.revoke_session(session.session_id)
     # Always clear the browser's auth cookies, even for an already-dead session.
     clear_auth_cookies(response)
     return Message(detail="Logged out")
@@ -313,5 +313,5 @@ def change_password(body: ChangePasswordRequest, user: CurrentUser, db: DbSessio
     sessions.revoke_user_sessions(db, user.id, "password_change")
     record_audit(db, user=user, action="change_password", resource_type="user", resource_id=user.id, request=request)
     db.commit()
-    manager.close_user(user.id)
+    revocation_bus.revoke_user(user.id)
     return Message(detail="Password updated")

@@ -6,8 +6,8 @@ from app.core.deps import DbSession, require_roles
 from app.models import Organization, User
 from app.schemas.common import Message, Page
 from app.schemas.tenancy import OrganizationCreate, OrganizationOut, OrganizationUpdate
+from app.services import revocation_bus
 from app.services.audit import record_audit
-from app.services.events import manager
 from app.services.sessions import revoke_org_sessions
 
 router = APIRouter(prefix="/organizations", tags=["organizations"])
@@ -81,7 +81,7 @@ def update_organization(
     )
     db.commit()
     if suspended:
-        manager.close_org(org.id)  # tear down live monitor sockets for the whole org
+        revocation_bus.revoke_org(org.id)  # tear down live monitor sockets for the whole org
     return org
 
 

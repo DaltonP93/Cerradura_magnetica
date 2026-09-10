@@ -15,6 +15,7 @@ from app.core.config import get_settings
 from app.core.csrf import CSRFMiddleware
 from app.core.database import Base, engine, get_db
 from app.core.observability import RequestContextMiddleware, configure_logging
+from app.services import revocation_bus
 from app.services.events import set_main_loop
 
 logging.basicConfig(level=logging.INFO)
@@ -44,7 +45,12 @@ async def lifespan(app: FastAPI):
         Base.metadata.create_all(bind=engine)
     _warn_if_metrics_unprotected(settings)
     set_main_loop(asyncio.get_running_loop())
-    yield
+    # Fan session revocations out across workers (no-op unless ACP_REDIS_URL set).
+    revocation_bus.start_subscriber()
+    try:
+        yield
+    finally:
+        revocation_bus.stop_subscriber()
 
 
 app = FastAPI(
