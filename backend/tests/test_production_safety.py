@@ -63,6 +63,29 @@ def test_production_accepts_strong_config():
     assert cfg.production_issues() == []
 
 
+def test_production_rejects_wildcard_forwarded_allow_ips():
+    # F-2: trusting X-Forwarded-For from any peer ("*") lets a client spoof its
+    # source IP, bypassing the per-IP auth rate limit and forging the audit IP.
+    with pytest.raises(ValidationError):
+        Settings(**_prod(forwarded_allow_ips="*"))
+
+
+def test_production_accepts_specific_forwarded_allow_ips():
+    cfg = Settings(**_prod(forwarded_allow_ips="10.0.0.5,10.0.0.6"))
+    assert cfg.production_issues() == []
+
+
+def test_development_allows_wildcard_forwarded_allow_ips():
+    # The isolated dev/compose network may use "*"; only production forbids it.
+    cfg = Settings(secret_key=STRONG_SECRET, forwarded_allow_ips="*")
+    assert cfg.is_production is False
+
+
+def test_default_forwarded_allow_ips_is_not_wildcard():
+    # The image/config default must be safe out of the box.
+    assert Settings(secret_key=STRONG_SECRET).forwarded_allow_ips != "*"
+
+
 def test_seed_refuses_to_run_in_production():
     cfg = Settings(**_prod())
     with pytest.raises(SystemExit):

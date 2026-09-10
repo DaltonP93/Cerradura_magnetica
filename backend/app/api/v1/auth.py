@@ -4,7 +4,7 @@ from typing import Annotated
 import jwt as pyjwt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.core.config import get_settings
 from app.core.cookies import (
@@ -46,6 +46,40 @@ def _as_utc(dt: datetime | None) -> datetime | None:
     return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
 
 
+def _register_failed_login(db, user: User, now: datetime, request: Request) -> None:
+    """Count a failed login and lock the account at the threshold — atomically.
+
+    F-1: the counter is bumped with a single ``UPDATE ... SET failed_login_count
+    = failed_login_count + 1`` (evaluated under the row lock), not a Python
+    read-modify-write, so concurrent failed attempts cannot lose increments and
+    slip past the lockout threshold. The DB is the source of truth for the count.
+    """
+    new_count = db.execute(
+        update(User)
+        .where(User.id == user.id)
+        .values(failed_login_count=User.failed_login_count + 1)
+        .returning(User.failed_login_count)
+        .execution_options(synchronize_session=False)
+    ).scalar_one()
+    if new_count >= settings.login_max_attempts:
+        db.execute(
+            update(User)
+            .where(User.id == user.id)
+            .values(
+                locked_until=now + timedelta(minutes=settings.login_lockout_minutes),
+                failed_login_count=0,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        record_audit(
+            db, user=user, action="account_locked", resource_type="user",
+            resource_id=user.id, request=request,
+            details={"lockout_minutes": settings.login_lockout_minutes},
+        )
+    db.expire(user)  # ORM copy is stale after the Core UPDATE(s)
+    db.commit()
+
+
 @router.post("/login", response_model=TokenPair, dependencies=[Depends(rate_limit_auth)])
 def login(body: LoginRequest, db: DbSession, request: Request, response: Response):
     user = db.execute(select(User).where(User.email == body.email.lower())).scalar_one_or_none()
@@ -61,16 +95,7 @@ def login(body: LoginRequest, db: DbSession, request: Request, response: Respons
     if user is None or not verify_password(body.password, user.hashed_password):
         # Count the failure and lock the account once the threshold is reached.
         if user is not None:
-            user.failed_login_count += 1
-            if user.failed_login_count >= settings.login_max_attempts:
-                user.locked_until = now + timedelta(minutes=settings.login_lockout_minutes)
-                user.failed_login_count = 0
-                record_audit(
-                    db, user=user, action="account_locked", resource_type="user",
-                    resource_id=user.id, request=request,
-                    details={"lockout_minutes": settings.login_lockout_minutes},
-                )
-            db.commit()
+            _register_failed_login(db, user, now, request)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Incorrect email or password")
 
     if not user.is_active:
@@ -84,11 +109,7 @@ def login(body: LoginRequest, db: DbSession, request: Request, response: Respons
         if not body.mfa_code:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "MFA code required")
         if not verify_code(user.mfa_secret, body.mfa_code):
-            user.failed_login_count += 1
-            if user.failed_login_count >= settings.login_max_attempts:
-                user.locked_until = now + timedelta(minutes=settings.login_lockout_minutes)
-                user.failed_login_count = 0
-            db.commit()
+            _register_failed_login(db, user, now, request)
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid MFA code")
 
     # A successful login clears any accumulated failure state.

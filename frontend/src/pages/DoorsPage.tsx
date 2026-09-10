@@ -18,6 +18,12 @@ import { Badge } from '../components/StatusBadge';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { DOOR_MODE_LABELS } from '../lib/format';
+import {
+  ADVANCED_FLAGS_ENFORCED,
+  ADVANCED_FLAGS_NOTICE,
+  activeAdvancedFlags,
+  flagBadgeLabel,
+} from '../lib/doorFlags';
 import { useFetch } from '../lib/useFetch';
 import type { Door, DoorMode } from '../types';
 
@@ -156,6 +162,11 @@ export function DoorsPage() {
           {d.first_card_open && <Badge tone="slate">1ª tarjeta</Badge>}
           {d.multi_card_count > 1 && <Badge tone="slate">{d.multi_card_count} tarjetas</Badge>}
           {d.requires_dual_approval && <Badge tone="amber">Doble aprobación</Badge>}
+          {activeAdvancedFlags(d).map((f) => (
+            <Badge key={f.key} tone="amber" title={ADVANCED_FLAGS_NOTICE}>
+              {flagBadgeLabel(f.label)}
+            </Badge>
+          ))}
         </div>
       ),
     },
@@ -284,14 +295,19 @@ export function DoorsPage() {
                 checked={form.sensor_enabled}
                 onChange={(v) => setForm({ ...form, sensor_enabled: v })}
               />
+              <div className="rounded-md border border-amber-500/40 bg-amber-950/30 px-3 py-2 text-xs text-amber-200">
+                <span className="font-semibold">Experimental · no aplicado.</span> {ADVANCED_FLAGS_NOTICE}
+              </div>
               <Checkbox
-                label="Anti-passback"
+                label="Anti-passback (no aplicado)"
                 checked={form.anti_passback}
+                disabled={!ADVANCED_FLAGS_ENFORCED}
                 onChange={(v) => setForm({ ...form, anti_passback: v })}
               />
               <Checkbox
-                label="Apertura con primera tarjeta"
+                label="Apertura con primera tarjeta (no aplicado)"
                 checked={form.first_card_open}
+                disabled={!ADVANCED_FLAGS_ENFORCED}
                 onChange={(v) => setForm({ ...form, first_card_open: v })}
               />
               <Checkbox
@@ -301,11 +317,12 @@ export function DoorsPage() {
               />
             </div>
             <FormField
-              label="Tarjetas simultáneas requeridas"
-              hint="1 = deshabilitado; con 2–4 se necesitan varias tarjetas válidas para abrir."
+              label="Tarjetas simultáneas requeridas (no aplicado)"
+              hint="Configuración guardada pero aún no aplicada por la plataforma (requiere hardware real). 1 = deshabilitado."
             >
               <Select
                 value={form.multi_card_count}
+                disabled={!ADVANCED_FLAGS_ENFORCED}
                 onChange={(e) => setForm({ ...form, multi_card_count: e.target.value })}
               >
                 {[1, 2, 3, 4].map((n) => (

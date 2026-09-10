@@ -19,7 +19,9 @@ EXPOSE 8000
 # Liveness check (does not depend on the database); readiness is /health/ready.
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD curl -sf http://localhost:8000/health || exit 1
 
-# --proxy-headers makes uvicorn honour X-Forwarded-For/Proto from the reverse
-# proxy, so the client IP used for rate limiting is the real client, not nginx.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", \
-     "--proxy-headers", "--forwarded-allow-ips", "*"]
+# --proxy-headers makes uvicorn honour X-Forwarded-For/Proto, but ONLY from the
+# trusted reverse proxy IP(s) in ACP_FORWARDED_ALLOW_IPS (default 127.0.0.1 —
+# never "*", which would let any client spoof its source IP). Set it to your
+# reverse proxy's address in deployment. Shell form so the env var expands.
+CMD uvicorn app.main:app --host 0.0.0.0 --port 8000 \
+    --proxy-headers --forwarded-allow-ips "${ACP_FORWARDED_ALLOW_IPS:-127.0.0.1}"

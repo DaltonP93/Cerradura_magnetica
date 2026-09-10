@@ -9,3 +9,4 @@ import { afterEach } from 'vitest';
 // With `globals: false` Testing Library cannot auto-register its afterEach, so
 // unmount between tests explicitly to keep the jsdom document isolated.
 afterEach(() => cleanup());
+import '@testing-library/jest-dom/vitest';
