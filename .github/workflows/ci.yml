@@ -69,6 +69,56 @@ jobs:
       - name: Tests (PostgreSQL)
         run: pytest tests -q
 
+  backup-restore-postgres:
+    # Real, disposable PostgreSQL end-to-end test of scripts/backup_db.sh and
+    # scripts/restore_db.sh (non-destructive swap + validation-abort safety),
+    # not just the fake-`docker compose` unit tests.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      ACP_PG_INTEGRATION: "1"
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - name: Install PostgreSQL client (psql + pg_dump) and ShellCheck
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client shellcheck
+      - name: Lint shell scripts (sh -n + ShellCheck)
+        working-directory: .
+        run: |
+          for f in scripts/*.sh scripts/ci/*.sh; do
+            echo "== $f =="
+            sh -n "$f"
+            shellcheck "$f"
+          done
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Real backup/restore end-to-end test
+        run: pytest tests/test_backup_restore_integration.py -q
+
   frontend:
     runs-on: ubuntu-latest
     defaults:
