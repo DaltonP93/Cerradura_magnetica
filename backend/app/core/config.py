@@ -76,6 +76,10 @@ class Settings(BaseSettings):
     # certificate (mTLS) and passes its fingerprint in this header. The edge MUST
     # set/overwrite it and strip any client-supplied value (see docs/GATEWAY_BRIDGE.md).
     bridge_cert_header: str = "X-Client-Cert-Fingerprint"
+    # F-4: the bridge also presents a per-bridge shared secret in this header, on
+    # top of the mTLS fingerprint. The API verifies it (constant-time) against a
+    # stored hash, so a spoofed/forwarded fingerprint alone is not enough to auth.
+    bridge_secret_header: str = "X-Bridge-Secret"
 
     # How controller/door commands reach the hardware:
     #   "direct" (default) — call the ControllerGateway synchronously (simulated

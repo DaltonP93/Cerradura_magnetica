@@ -33,6 +33,23 @@ def verify_password(plain: str, hashed: str) -> bool:
         return False
 
 
+def generate_secret() -> str:
+    """A high-entropy URL-safe secret (e.g. a per-bridge shared secret)."""
+    return secrets.token_urlsafe(32)
+
+
+def verify_secret(plain: str, hashed: str) -> bool:
+    """Constant-time check of a high-entropy secret against its SHA-256 hash.
+
+    High-entropy tokens don't need a slow password hash; we store the SHA-256
+    digest (like session/refresh tokens) and compare digests in constant time.
+    An empty ``plain`` or ``hashed`` never verifies.
+    """
+    if not plain or not hashed:
+        return False
+    return secrets.compare_digest(hash_token(plain), hashed)
+
+
 def _create_token(subject: str, token_type: str, expires_delta: timedelta, extra: dict[str, Any] | None = None) -> str:
     now = datetime.now(UTC)
     payload: dict[str, Any] = {
