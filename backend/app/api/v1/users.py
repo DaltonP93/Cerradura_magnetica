@@ -7,8 +7,8 @@ from app.core.security import hash_password
 from app.models import Organization, User, UserRole
 from app.schemas.auth import UserCreate, UserOut, UserUpdate
 from app.schemas.common import Message, Page
+from app.services import revocation_bus
 from app.services.audit import record_audit
-from app.services.events import manager
 from app.services.sessions import revoke_user_sessions
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -106,7 +106,7 @@ def update_user(
     )
     db.commit()
     if invalidate_sessions:
-        manager.close_user(target.id)  # tear down live monitor sockets
+        revocation_bus.revoke_user(target.id)  # tear down live monitor sockets
     return target
 
 

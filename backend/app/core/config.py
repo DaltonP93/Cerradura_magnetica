@@ -67,10 +67,12 @@ class Settings(BaseSettings):
     login_max_attempts: int = 5
     login_lockout_minutes: int = 15
     auth_rate_limit_per_minute: int = 30
-    # Optional Redis URL (e.g. redis://host:6379/0). When set, the auth rate
+    # Optional Redis URL (e.g. redis://host:6379/0). When set: (1) the auth rate
     # limiter uses Redis so the per-IP limit is enforced **across all workers**
-    # (a single process otherwise only throttles its own share). When unset the
-    # limiter stays in-process (fine for a single worker).
+    # (a single process otherwise only throttles its own share); (2) session
+    # revocations fan out over Redis Pub/Sub so live sockets on every worker
+    # close instantly. When unset both stay in-process (fine for a single
+    # worker; the DB revalidation remains the cross-worker safety net).
     redis_url: str | None = None
 
     # Two-person rule: a pending remote-open request on a critical door must be
