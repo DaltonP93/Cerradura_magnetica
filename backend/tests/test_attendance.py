@@ -59,12 +59,21 @@ def report(client, headers, day: date, **params):
 
 
 def test_shift_crud_and_validation(client, admin_headers):
+    # Zero-length shift (start == end) is invalid.
     resp = client.post(
         "/api/v1/attendance/shifts",
-        json={"name": "Malo", "start_time": "18:00:00", "end_time": "09:00:00"},
+        json={"name": "Malo", "start_time": "09:00:00", "end_time": "09:00:00"},
         headers=admin_headers,
     )
-    assert resp.status_code == 422  # start >= end
+    assert resp.status_code == 422  # start == end
+
+    # An overnight shift (end before start) is now allowed (crosses midnight).
+    overnight = client.post(
+        "/api/v1/attendance/shifts",
+        json={"name": "Nocturno", "start_time": "22:00:00", "end_time": "06:00:00"},
+        headers=admin_headers,
+    )
+    assert overnight.status_code == 201, overnight.text
 
     shift = client.post(
         "/api/v1/attendance/shifts",
@@ -230,3 +239,60 @@ def test_viewer_cannot_manage_shifts(client, viewer_headers):
         headers=viewer_headers,
     )
     assert resp.status_code == 403
+
+
+# --- Overnight shifts (P1-5): a shift that crosses midnight -----------------
+@pytest.fixture
+def overnight_staff(client, admin_headers):
+    """A 22:00→06:00 shift (all week) with one cardholder assigned."""
+    shift = client.post(
+        "/api/v1/attendance/shifts",
+        json={
+            "name": "Nocturno 22-06",
+            "start_time": "22:00:00",
+            "end_time": "06:00:00",
+            "late_tolerance_minutes": 10,
+            "early_leave_tolerance_minutes": 10,
+            "days_of_week": [0, 1, 2, 3, 4, 5, 6],
+        },
+        headers=admin_headers,
+    ).json()
+    holder = client.post(
+        "/api/v1/cardholders",
+        json={"first_name": "Nadia", "last_name": "Vega", "shift_id": shift["id"]},
+        headers=admin_headers,
+    ).json()
+    return {"shift": shift, "holder": holder}
+
+
+def test_overnight_present_spans_midnight(client, admin_headers, seeded, overnight_staff):
+    day = date.today() - timedelta(days=2)
+    hid = overnight_staff["holder"]["id"]
+    # Check-in just before 22:00 on `day`, check-out just after 06:00 next morning.
+    add_punch(seeded["org_a"], hid, datetime.combine(day, time(21, 55)))
+    add_punch(seeded["org_a"], hid, datetime.combine(day + timedelta(days=1), time(6, 5)))
+
+    row = report(client, admin_headers, day, cardholder_id=hid)["rows"][0]
+    # Both punches attribute to `day`'s instance → present, on time, complete.
+    assert row["statuses"] == ["present"]
+    assert row["check_in"].endswith("21:55:00")
+    assert row["check_out"].endswith("06:05:00")
+
+
+def test_overnight_late_and_early_leave(client, admin_headers, seeded, overnight_staff):
+    day = date.today() - timedelta(days=2)
+    hid = overnight_staff["holder"]["id"]
+    # In at 22:30 (> 22:10 tolerance → late); out at 05:00 (< 05:50 → early leave).
+    add_punch(seeded["org_a"], hid, datetime.combine(day, time(22, 30)))
+    add_punch(seeded["org_a"], hid, datetime.combine(day + timedelta(days=1), time(5, 0)))
+
+    row = report(client, admin_headers, day, cardholder_id=hid)["rows"][0]
+    assert set(row["statuses"]) == {"present", "late", "early_leave"}
+
+
+def test_overnight_only_checkin_is_incomplete(client, admin_headers, seeded, overnight_staff):
+    day = date.today() - timedelta(days=2)
+    hid = overnight_staff["holder"]["id"]
+    add_punch(seeded["org_a"], hid, datetime.combine(day, time(22, 0)))
+    row = report(client, admin_headers, day, cardholder_id=hid)["rows"][0]
+    assert "incomplete" in row["statuses"]

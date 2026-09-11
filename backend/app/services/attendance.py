@@ -37,6 +37,37 @@ def _to_local(dt: datetime, tz: ZoneInfo) -> datetime:
     return aware.astimezone(tz).replace(tzinfo=None)
 
 
+def _is_overnight(shift: Shift | None) -> bool:
+    """A shift whose end wall-clock time is strictly before its start crosses
+    midnight (e.g. 22:00 → 06:00)."""
+    return shift is not None and shift.end_time < shift.start_time
+
+
+def _seconds(t: time) -> int:
+    return t.hour * 3600 + t.minute * 60 + t.second
+
+
+def _attribution_date(local_dt: datetime, shift: Shift | None) -> date:
+    """Which shift-instance day a punch belongs to.
+
+    Normal shifts attribute a punch to its own calendar day. For an overnight
+    shift the instance starts the evening of day D and ends the morning of D+1;
+    the "off" period runs from the end time to the start time. Punches in the
+    first half of that gap (early morning, including a slightly-late checkout)
+    belong to the *previous* day's instance; punches from the midpoint onward
+    (afternoon/evening, including a slightly-early check-in) belong to their own
+    day. Splitting at the midpoint tolerates arrivals before start and
+    departures after end without misattributing them.
+    """
+    if not _is_overnight(shift):
+        return local_dt.date()
+    assert shift is not None
+    midpoint = (_seconds(shift.end_time) + _seconds(shift.start_time)) // 2
+    if _seconds(local_dt.time()) < midpoint:
+        return local_dt.date() - timedelta(days=1)
+    return local_dt.date()
+
+
 def compute_attendance(
     db: Session,
     *,
@@ -76,8 +107,11 @@ def compute_attendance(
     range_start = datetime.combine(date_from - timedelta(days=1), time.min)
     range_end = datetime.combine(date_to + timedelta(days=2), time.min)
 
-    # Punches: granted access events + manual signs, grouped by (cardholder, day)
-    punches: dict[tuple[int, date], list[datetime]] = {}
+    # Punches: granted access events + manual signs, collected per cardholder as
+    # local datetimes. Bucketing into shift-instance days happens later, once we
+    # know each holder's shift (overnight shifts attribute early-morning punches
+    # to the previous day).
+    raw_by_holder: dict[int, list[datetime]] = {}
     events = db.execute(
         select(Event.cardholder_id, Event.occurred_at).where(
             Event.organization_id == organization_id,
@@ -88,8 +122,7 @@ def compute_attendance(
         )
     )
     for holder_id, occurred_at in events:
-        local = _to_local(occurred_at, tz)
-        punches.setdefault((holder_id, local.date()), []).append(local)
+        raw_by_holder.setdefault(holder_id, []).append(_to_local(occurred_at, tz))
     signs = db.execute(
         select(ManualSign.cardholder_id, ManualSign.signed_at).where(
             ManualSign.organization_id == organization_id,
@@ -99,8 +132,7 @@ def compute_attendance(
         )
     )
     for holder_id, signed_at in signs:
-        local = _to_local(signed_at, tz)
-        punches.setdefault((holder_id, local.date()), []).append(local)
+        raw_by_holder.setdefault(holder_id, []).append(_to_local(signed_at, tz))
 
     leaves: dict[int, list[Leave]] = {}
     for leave in db.execute(
@@ -131,9 +163,14 @@ def compute_attendance(
     rows: list[DayRow] = []
     for holder in holders:
         shift = shifts.get(holder.shift_id) if holder.shift_id else None
+        # Bucket this holder's punches into shift-instance days (overnight shifts
+        # attribute early-morning punches to the previous day).
+        holder_punches: dict[date, list[datetime]] = {}
+        for local in raw_by_holder.get(holder.id, []):
+            holder_punches.setdefault(_attribution_date(local, shift), []).append(local)
         day = date_from
         while day <= date_to:
-            rows.append(_evaluate_day(holder, shift, day, punches, leaves, holidays))
+            rows.append(_evaluate_day(holder, shift, day, holder_punches, leaves, holidays))
             day += timedelta(days=1)
     return rows
 
@@ -142,11 +179,11 @@ def _evaluate_day(
     holder: Cardholder,
     shift: Shift | None,
     day: date,
-    punches: dict[tuple[int, date], list[datetime]],
+    punches: dict[date, list[datetime]],
     leaves: dict[int, list[Leave]],
     holidays: set[date],
 ) -> DayRow:
-    day_punches = sorted(punches.get((holder.id, day), []))
+    day_punches = sorted(punches.get(day, []))
     check_in = day_punches[0] if day_punches else None
     check_out = day_punches[-1] if len(day_punches) > 1 else None
 
@@ -170,13 +207,15 @@ def _evaluate_day(
     else:
         statuses.append("present")
         assert shift is not None
+        # For an overnight shift the expected end falls on the following day.
+        end_day = day + timedelta(days=1) if _is_overnight(shift) else day
         late_limit = (
             datetime.combine(day, shift.start_time) + timedelta(minutes=shift.late_tolerance_minutes)
         )
         if check_in and check_in > late_limit:
             statuses.append("late")
         early_limit = (
-            datetime.combine(day, shift.end_time)
+            datetime.combine(end_day, shift.end_time)
             - timedelta(minutes=shift.early_leave_tolerance_minutes)
         )
         if check_out and check_out < early_limit:
