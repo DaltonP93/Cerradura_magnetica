@@ -9,6 +9,7 @@ import pytest
 
 from app.core.config import get_settings
 from app.core.database import SessionLocal
+from app.core.security import hash_token
 from app.models import GatewayBridge, GatewayCommand, GatewayCommandType
 
 
@@ -137,17 +138,24 @@ def test_bridge_can_claim_and_ack_revoke_command(client, admin_headers, seeded, 
         f"/api/v1/cardholders/{hid}/credentials/{cid}",
         json={"is_active": False}, headers=admin_headers,
     )
-    # Register the org's bridge (fingerprint auth on this base branch).
+    # Register the org's bridge. F-4: authentication requires the mTLS
+    # fingerprint AND a per-bridge shared secret (stored only as a hash); a
+    # bridge without a secret_hash is fail-closed and cannot authenticate.
+    bridge_secret = "revoke-test-secret-xyz789"
     db = SessionLocal()
     try:
         db.add(GatewayBridge(
             organization_id=seeded["org_a"], name="Bridge", cert_fingerprint="ffee0011",
-            is_active=True,
+            secret_hash=hash_token(bridge_secret), is_active=True,
         ))
         db.commit()
     finally:
         db.close()
-    headers = {get_settings().bridge_cert_header: "ffee0011"}
+    settings = get_settings()
+    headers = {
+        settings.bridge_cert_header: "ffee0011",
+        settings.bridge_secret_header: bridge_secret,
+    }
     client.cookies.clear()
     claimed = client.post(
         "/api/v1/gateway/commands/claim", json={"worker_token": "w1"}, headers=headers
