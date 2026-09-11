@@ -32,8 +32,7 @@ from app.schemas.auth import (
     UserOut,
 )
 from app.schemas.common import Message
-from app.services import revocation_bus, sessions
-from app.services import mfa_recovery, sessions
+from app.services import mfa_recovery, revocation_bus, sessions
 from app.services.audit import record_audit
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -132,12 +131,7 @@ def login(body: LoginRequest, db: DbSession, request: Request, response: Respons
             # commit below on the success path.
             recovery_ok = mfa_recovery.consume(user, body.recovery_code)
         if not code_ok and not recovery_ok:
-            user.failed_login_count += 1
-            if user.failed_login_count >= settings.login_max_attempts:
-                user.locked_until = now + timedelta(minutes=settings.login_lockout_minutes)
-                user.failed_login_count = 0
-            db.commit()
-        if not verify_code(user.mfa_secret, body.mfa_code):
+            # F-1: atomic failure/lockout accounting (shared with the password path).
             _register_failed_login(db, user, now, request)
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid MFA code")
         if recovery_ok:

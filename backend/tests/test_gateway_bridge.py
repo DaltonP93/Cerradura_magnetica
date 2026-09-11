@@ -505,7 +505,7 @@ def test_inbox_concurrent_conflict_counts_as_duplicate(client, org_a_setup, monk
         {"event_uid": "conc-1", "type": "alarm", "controller_id": org_a_setup["controller_id"]},
         {"event_uid": "conc-2", "type": "alarm", "controller_id": org_a_setup["controller_id"]},
     ]
-    resp = client.post("/api/v1/gateway/events", json={"events": events}, headers={HEADER: "aabbccdd"})
+    resp = client.post("/api/v1/gateway/events", json={"events": events}, headers=_bhdr())
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["accepted"] == 1  # the second event
