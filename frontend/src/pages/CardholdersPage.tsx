@@ -81,21 +81,26 @@ function ImportModal({
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
 
-  const handleUpload = async () => {
+  const runImport = async (dryRun: boolean) => {
     if (!file) return;
     setBusy(true);
     setError(null);
     setResult(null);
     try {
-      const res = isCsv ? await cardholdersApi.importCsv(file) : await cardholdersApi.importMdb(file);
+      const res = isCsv
+        ? await cardholdersApi.importCsv(file, dryRun)
+        : await cardholdersApi.importMdb(file, dryRun);
       setResult(res);
-      if (res.created > 0) onImported();
+      if (!dryRun && res.created > 0) onImported();
     } catch (err) {
       setError(apiErrorMessage(err));
     } finally {
       setBusy(false);
     }
   };
+
+  // After a successful apply, only the Close button remains useful.
+  const applied = result != null && !result.dry_run;
 
   return (
     <Modal
@@ -107,7 +112,19 @@ function ImportModal({
           <button className={BTN_SECONDARY} onClick={onClose} disabled={busy}>
             Cerrar
           </button>
-          <button className={BTN_PRIMARY} onClick={() => void handleUpload()} disabled={busy || !file}>
+          <button
+            className={BTN_SECONDARY}
+            onClick={() => void runImport(true)}
+            disabled={busy || !file || applied}
+          >
+            {busy && <Spinner className="h-4 w-4" />}
+            Vista previa
+          </button>
+          <button
+            className={BTN_PRIMARY}
+            onClick={() => void runImport(false)}
+            disabled={busy || !file || applied}
+          >
             {busy && <Spinner className="h-4 w-4" />}
             Importar
           </button>
@@ -142,10 +159,29 @@ function ImportModal({
 
         {result && (
           <div className="space-y-2 rounded-md border border-slate-700/60 bg-slate-800/40 px-3 py-3 text-sm">
-            <p className={result.created > 0 ? 'text-emerald-300' : 'text-slate-300'}>
-              ✓ {result.created} persona{result.created === 1 ? '' : 's'} importada
-              {result.created === 1 ? '' : 's'}.
-            </p>
+            {result.dry_run ? (
+              <>
+                <p className="text-sky-300">
+                  Vista previa (no se guardó nada): {result.valid} fila
+                  {result.valid === 1 ? '' : 's'} válida{result.valid === 1 ? '' : 's'} lista
+                  {result.valid === 1 ? '' : 's'} para importar
+                  {result.skipped > 0
+                    ? `, ${result.skipped} se omitirá${result.skipped === 1 ? '' : 'n'}`
+                    : ''}
+                  . Pulsa «Importar» para aplicar.
+                </p>
+                {result.new_departments.length > 0 && (
+                  <p className="text-slate-400">
+                    Departamentos nuevos que se crearían: {result.new_departments.join(', ')}
+                  </p>
+                )}
+              </>
+            ) : (
+              <p className={result.created > 0 ? 'text-emerald-300' : 'text-slate-300'}>
+                ✓ {result.created} persona{result.created === 1 ? '' : 's'} importada
+                {result.created === 1 ? '' : 's'}.
+              </p>
+            )}
             {result.errors.length > 0 && (
               <div>
                 <p className="mb-1 text-amber-300">
