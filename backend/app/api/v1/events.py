@@ -1,6 +1,9 @@
+import csv
+import io
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 
 from app.api.helpers import get_or_404, paginate
@@ -16,6 +19,26 @@ router = APIRouter(prefix="/events", tags=["events"])
 
 Operator = Depends(require_roles(UserRole.ADMIN, UserRole.OPERATOR))
 AnyUser = Depends(require_roles(UserRole.ADMIN, UserRole.OPERATOR, UserRole.VIEWER))
+
+# Upper bound on a single CSV export, so an unbounded range can't stream forever.
+EXPORT_MAX_ROWS = 100_000
+
+
+def _event_filters(stmt, *, type, door_id, controller_id, cardholder_id, date_from, date_to):
+    """Apply the shared event query filters (used by the list and the export)."""
+    if type is not None:
+        stmt = stmt.where(Event.type == type)
+    if door_id is not None:
+        stmt = stmt.where(Event.door_id == door_id)
+    if controller_id is not None:
+        stmt = stmt.where(Event.controller_id == controller_id)
+    if cardholder_id is not None:
+        stmt = stmt.where(Event.cardholder_id == cardholder_id)
+    if date_from is not None:
+        stmt = stmt.where(Event.occurred_at >= date_from.replace(tzinfo=None))
+    if date_to is not None:
+        stmt = stmt.where(Event.occurred_at <= date_to.replace(tzinfo=None))
+    return stmt
 
 
 @router.get("", response_model=Page[EventOut], dependencies=[AnyUser])
@@ -36,20 +59,71 @@ def list_events(
         .where(Event.organization_id == org_id)
         .order_by(Event.occurred_at.desc(), Event.id.desc())
     )
-    if type is not None:
-        stmt = stmt.where(Event.type == type)
-    if door_id is not None:
-        stmt = stmt.where(Event.door_id == door_id)
-    if controller_id is not None:
-        stmt = stmt.where(Event.controller_id == controller_id)
-    if cardholder_id is not None:
-        stmt = stmt.where(Event.cardholder_id == cardholder_id)
-    if date_from is not None:
-        stmt = stmt.where(Event.occurred_at >= date_from.replace(tzinfo=None))
-    if date_to is not None:
-        stmt = stmt.where(Event.occurred_at <= date_to.replace(tzinfo=None))
+    stmt = _event_filters(
+        stmt, type=type, door_id=door_id, controller_id=controller_id,
+        cardholder_id=cardholder_id, date_from=date_from, date_to=date_to,
+    )
     items, total = paginate(db, stmt, limit, offset)
     return Page(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.get("/export.csv", dependencies=[AnyUser])
+def export_events_csv(
+    db: DbSession,
+    org_id: OrgId,
+    type: EventType | None = None,
+    door_id: int | None = None,
+    controller_id: int | None = None,
+    cardholder_id: int | None = None,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+):
+    """Stream the full event report (all matching rows, not just one page) as CSV.
+
+    Same filters as the list endpoint. Only non-sensitive columns are emitted —
+    no raw ``details`` blob and no card numbers (invariant #6). Capped at
+    ``EXPORT_MAX_ROWS`` rows.
+    """
+    stmt = (
+        select(
+            Event.id, Event.occurred_at, Event.type, Event.message,
+            Event.controller_id, Event.door_id, Event.cardholder_id,
+        )
+        .where(Event.organization_id == org_id)
+        .order_by(Event.occurred_at.desc(), Event.id.desc())
+        .limit(EXPORT_MAX_ROWS)
+    )
+    stmt = _event_filters(
+        stmt, type=type, door_id=door_id, controller_id=controller_id,
+        cardholder_id=cardholder_id, date_from=date_from, date_to=date_to,
+    )
+    rows = db.execute(stmt).all()
+
+    def generate():
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(
+            ["id", "occurred_at", "type", "message", "controller_id", "door_id", "cardholder_id"]
+        )
+        for r in rows:
+            writer.writerow([
+                r.id,
+                r.occurred_at.isoformat() if r.occurred_at else "",
+                r.type.value if r.type else "",
+                r.message,
+                r.controller_id if r.controller_id is not None else "",
+                r.door_id if r.door_id is not None else "",
+                r.cardholder_id if r.cardholder_id is not None else "",
+            ])
+        buf.seek(0)
+        yield buf.getvalue()
+
+    filename = f"eventos_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    return StreamingResponse(
+        generate(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post("/swipe", response_model=SwipeResult)
