@@ -446,7 +446,11 @@ export interface AttendanceReport {
 
 // ---- Bulk import ----
 export interface ImportResult {
+  dry_run: boolean;
   created: number;
+  valid: number;
+  skipped: number;
+  new_departments: string[];
   errors: { row?: number | string; reason?: string; [key: string]: unknown }[];
 }
 

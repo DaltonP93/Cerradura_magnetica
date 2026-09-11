@@ -175,15 +175,19 @@ export const cardholdersApi = {
     api
       .delete<{ detail: string }>(`/cardholders/${cardholderId}/credentials/${credentialId}`)
       .then((r) => r.data),
-  importCsv: (file: File) => {
+  importCsv: (file: File, dryRun = false) => {
     const form = new FormData();
     form.append('file', file);
-    return api.post<ImportResult>('/cardholders/import', form).then((r) => r.data);
+    return api
+      .post<ImportResult>('/cardholders/import', form, { params: { dry_run: dryRun } })
+      .then((r) => r.data);
   },
-  importMdb: (file: File) => {
+  importMdb: (file: File, dryRun = false) => {
     const form = new FormData();
     form.append('file', file);
-    return api.post<ImportResult>('/cardholders/import-mdb', form).then((r) => r.data);
+    return api
+      .post<ImportResult>('/cardholders/import-mdb', form, { params: { dry_run: dryRun } })
+      .then((r) => r.data);
   },
 };
 
