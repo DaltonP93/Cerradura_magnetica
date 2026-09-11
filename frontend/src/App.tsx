@@ -15,6 +15,7 @@ import { MonitoringPage } from './pages/MonitoringPage';
 import { OrganizationsPage } from './pages/OrganizationsPage';
 import { ReportsPage } from './pages/ReportsPage';
 import { SchedulesPage } from './pages/SchedulesPage';
+import { SecurityPage } from './pages/SecurityPage';
 import { SitesPage } from './pages/SitesPage';
 import { UsersPage } from './pages/UsersPage';
 
@@ -41,6 +42,7 @@ export default function App() {
         <Route path="/niveles-acceso" element={<AccessLevelsPage />} />
         <Route path="/reportes" element={<ReportsPage />} />
         <Route path="/sitios" element={<SitesPage />} />
+        <Route path="/seguridad" element={<SecurityPage />} />
         <Route
           path="/auditoria"
           element={
