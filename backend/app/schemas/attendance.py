@@ -28,8 +28,10 @@ class ShiftCreate(BaseModel):
 
     @model_validator(mode="after")
     def check(self) -> "ShiftCreate":
-        if self.start_time >= self.end_time:
-            raise ValueError("start_time must be before end_time")
+        # An overnight shift (end before start, e.g. 22:00 → 06:00) is allowed
+        # and treated as crossing midnight; only a zero-length shift is invalid.
+        if self.start_time == self.end_time:
+            raise ValueError("start_time and end_time must differ")
         if any(d < 0 or d > 6 for d in self.days_of_week):
             raise ValueError("days_of_week values must be 0..6")
         return self
