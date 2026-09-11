@@ -110,6 +110,30 @@ def update_user(
     return target
 
 
+@router.post("/{user_id}/reset-mfa", response_model=UserOut)
+def reset_user_mfa(user_id: int, db: DbSession, org_id: OrgId, request: Request, actor: User = Admin):
+    """F-5 (admin path): disable a user's MFA so they can sign in again.
+
+    Recourse for a user who lost their authenticator *and* their recovery codes.
+    Clears the second factor and its recovery codes, and revokes the user's live
+    sessions. Audited. Self-service re-enrolment happens from the Security page.
+    """
+    target = _get_scoped_user(db, user_id, actor, org_id)
+    was_enabled = target.mfa_enabled
+    target.mfa_enabled = False
+    target.mfa_secret = None
+    target.mfa_recovery_hashes = None
+    count = revoke_user_sessions(db, target.id, "admin_reset_mfa")
+    record_audit(
+        db, user=actor, action="reset_mfa", resource_type="user",
+        resource_id=target.id, request=request, organization_id=target.organization_id,
+        details={"was_enabled": was_enabled, "revoked_sessions": count},
+    )
+    db.commit()
+    revocation_bus.revoke_user(target.id)  # tear down live monitor sockets
+    return target
+
+
 @router.delete("/{user_id}", response_model=Message)
 def delete_user(user_id: int, db: DbSession, org_id: OrgId, request: Request, actor: User = Admin):
     target = _get_scoped_user(db, user_id, actor, org_id)
