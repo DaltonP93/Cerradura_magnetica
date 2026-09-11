@@ -38,8 +38,20 @@ export interface User {
   full_name: string;
   role: UserRole;
   is_active: boolean;
+  mfa_enabled: boolean;
   last_login_at: string | null;
   created_at: string;
+}
+
+export interface MfaSetupResponse {
+  secret: string;
+  provisioning_uri: string;
+}
+
+export interface MfaEnableResponse {
+  detail: string;
+  /** Shown exactly once — the server stores only their hashes. */
+  recovery_codes: string[];
 }
 
 export interface UserCreate {

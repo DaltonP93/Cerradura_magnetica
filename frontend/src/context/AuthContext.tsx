@@ -18,8 +18,14 @@ import type { Organization, User, UserRole } from '../types';
 interface AuthContextValue {
   user: User | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  login: (
+    email: string,
+    password: string,
+    opts?: { mfaCode?: string; recoveryCode?: string },
+  ) => Promise<void>;
   logout: () => void;
+  /** Re-fetch the current user (e.g. after toggling MFA). */
+  refreshUser: () => Promise<void>;
   /** true if the user's role is at least as powerful as `role` */
   hasRole: (role: UserRole) => boolean;
   // Super admin organization scope
@@ -88,9 +94,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [bootstrapSuperAdmin]);
 
   const login = useCallback(
-    async (email: string, password: string) => {
+    async (email: string, password: string, opts?: { mfaCode?: string; recoveryCode?: string }) => {
       // The server sets the auth cookies; the token body is ignored here.
-      await authApi.login(email, password);
+      await authApi.login(email, password, opts);
       const me = await authApi.me();
       if (me.role === 'super_admin') {
         await bootstrapSuperAdmin(me);
@@ -101,6 +107,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     },
     [bootstrapSuperAdmin],
   );
+
+  const refreshUser = useCallback(async () => {
+    const me = await authApi.me();
+    setUser(me);
+  }, []);
 
   const logout = useCallback(() => {
     // Revoke the session and clear cookies server-side; ignore network errors.
@@ -124,8 +135,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo(
-    () => ({ user, loading, login, logout, hasRole, organizations, scopedOrgId, setOrgScope }),
-    [user, loading, login, logout, hasRole, organizations, scopedOrgId, setOrgScope],
+    () => ({ user, loading, login, logout, refreshUser, hasRole, organizations, scopedOrgId, setOrgScope }),
+    [user, loading, login, logout, refreshUser, hasRole, organizations, scopedOrgId, setOrgScope],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

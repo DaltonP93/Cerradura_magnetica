@@ -48,6 +48,10 @@ const NAV_SECTIONS: { title: string; items: NavItem[] }[] = [
       { to: '/organizaciones', label: 'Organizaciones', icon: '🌐', superAdminOnly: true },
     ],
   },
+  {
+    title: 'Mi cuenta',
+    items: [{ to: '/seguridad', label: 'Seguridad', icon: '🔐' }],
+  },
 ];
 
 export function Layout() {

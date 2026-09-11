@@ -27,6 +27,8 @@ import type {
   LeaveInput,
   ManualSign,
   ManualSignInput,
+  MfaEnableResponse,
+  MfaSetupResponse,
   Organization,
   OrganizationCreate,
   OrganizationUpdate,
@@ -48,13 +50,30 @@ import type {
 // Login/refresh set HttpOnly cookies server-side; the returned token body is
 // ignored by the SPA (kept in the type for programmatic clients).
 export const authApi = {
-  login: (email: string, password: string) =>
-    api.post<TokenPair>('/auth/login', { email, password }).then((r) => r.data),
+  login: (email: string, password: string, opts?: { mfaCode?: string; recoveryCode?: string }) =>
+    api
+      .post<TokenPair>('/auth/login', {
+        email,
+        password,
+        mfa_code: opts?.mfaCode || undefined,
+        recovery_code: opts?.recoveryCode || undefined,
+      })
+      .then((r) => r.data),
   refresh: () => api.post<TokenPair>('/auth/refresh', {}).then((r) => r.data),
   logout: () => api.post<{ detail: string }>('/auth/logout').then((r) => r.data),
   me: () => api.get<User>('/auth/me').then((r) => r.data),
   changePassword: (current_password: string, new_password: string) =>
     api.post<{ detail: string }>('/auth/change-password', { current_password, new_password }).then((r) => r.data),
+  // ---- MFA (TOTP) ----
+  mfaSetup: () => api.post<MfaSetupResponse>('/auth/mfa/setup').then((r) => r.data),
+  mfaEnable: (code: string) =>
+    api.post<MfaEnableResponse>('/auth/mfa/enable', { code }).then((r) => r.data),
+  mfaDisable: (password: string, code: string) =>
+    api.post<{ detail: string }>('/auth/mfa/disable', { password, code }).then((r) => r.data),
+  mfaRegenerateRecoveryCodes: (password: string, code: string) =>
+    api
+      .post<MfaEnableResponse>('/auth/mfa/recovery-codes', { password, code })
+      .then((r) => r.data),
 };
 
 // ---- dashboard ----
